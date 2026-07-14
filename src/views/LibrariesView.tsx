@@ -64,13 +64,13 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
                   {lib.totalIcons.toLocaleString()} icons · {lib.styles.length} style{lib.styles.length === 1 ? "" : "s"}
                 </Text>
               </Flex>
-              <Flex gap="1" align="center">
+              <Flex gap="2" align="center" wrap="wrap">
                 {lib.sampleIcons.map((icon) => (
                   <img
                     key={icon}
                     src={`https://api.iconify.design/${icon.replace(":", "/")}.svg?color=currentColor`}
-                    width={20}
-                    height={20}
+                    width={28}
+                    height={28}
                     alt=""
                   />
                 ))}

@@ -1,4 +1,4 @@
-import { IconData, IconLibrary, IconSearchResult, LibraryStyle } from "../types.d";
+import { IconData, IconLibrary, LibraryStyle } from "../types.d";
 
 const API_BASE = "https://api.iconify.design";
 
@@ -29,88 +29,104 @@ export function fingerprintFor(info: RawCollectionInfo): string {
   return `${info.version ?? "v0"}:${info.total}`;
 }
 
-// Trailing style words Iconify collection names commonly use to distinguish
-// sibling prefixes of the same underlying library (e.g. "Phosphor" / "Phosphor
-// Bold" / "Phosphor Duotone"). Longest phrases first so "Extra Bold" matches
-// before "Bold".
-const STYLE_WORDS = [
-  "Extra Thin", "Extra Bold", "Extra Light", "Two Tone", "Sharp Filled",
-  "Semi Bold", "Semibold", "Duotone", "Outlined", "Rounded", "Twotone",
-  "Filled", "Regular", "Outline", "Duo", "Thin", "Light", "Medium", "Bold",
-  "Black", "Fill", "Round", "Sharp", "Solid", "Line", "Mini", "Micro",
+// Trailing style suffixes Iconify uses to derive a sibling prefix from a
+// base one, e.g. "material-symbols" -> "material-symbols-light". Grouping is
+// driven by the *prefix*, not the display name: a candidate is only merged
+// when stripping the suffix yields another prefix that actually exists in
+// the dataset. This is what a purely name-based heuristic got wrong for
+// libraries like Material Icons ("ic"), whose baseline/outline/round/sharp
+// variants are separate *icon names* within one prefix, not sibling
+// prefixes — so "ic" now correctly stays a single-style library instead of
+// being misparsed from its display name. Longest phrases first so
+// "extra-bold" matches before "bold".
+const STYLE_SUFFIXES = [
+  "extra-thin", "extra-bold", "extra-light", "two-tone", "sharp-filled",
+  "semi-bold", "semibold", "duotone", "outlined", "rounded", "twotone",
+  "filled", "regular", "outline", "duo", "thin", "light", "medium", "bold",
+  "black", "fill", "round", "sharp", "solid", "line", "mini", "micro",
 ];
 
-function splitNameAndStyle(name: string): { base: string; style: string } {
-  for (const word of STYLE_WORDS) {
-    const suffix = new RegExp(`\\s+${word}$`, "i");
-    if (suffix.test(name)) {
-      return { base: name.replace(suffix, "").trim(), style: word };
+function titleCase(slug: string): string {
+  return slug.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+function splitPrefixAndStyle(prefix: string, prefixSet: Set<string>): { base: string; style: string } {
+  for (const suffix of STYLE_SUFFIXES) {
+    if (prefix.endsWith(`-${suffix}`)) {
+      const base = prefix.slice(0, -(suffix.length + 1));
+      if (prefixSet.has(base)) {
+        return { base, style: titleCase(suffix) };
+      }
     }
   }
-  return { base: name, style: "Default" };
+  return { base: prefix, style: "Default" };
+}
+
+// Iconify's public API doesn't expose download/popularity stats, so "popular
+// first" is approximated with a fixed ranking of well-known open source icon
+// sets. Everything else falls back to alphabetical.
+const POPULAR_PREFIXES = [
+  "lucide", "material-symbols", "mdi", "ph", "tabler", "heroicons",
+  "ion", "bi", "fa6-solid", "fa6-regular", "feather", "carbon", "ic",
+  "akar-icons", "iconoir", "solar", "streamline", "octicon", "ri",
+  "fluent", "eva", "la",
+];
+
+function popularityRank(id: string): number {
+  const i = POPULAR_PREFIXES.indexOf(id);
+  return i === -1 ? POPULAR_PREFIXES.length : i;
 }
 
 /**
  * Group Iconify's flat prefix list into browsable "libraries": sibling
- * prefixes that share a base name and author (e.g. all of Phosphor's five
- * styles) collapse into one entry with multiple `styles`.
+ * prefixes that share a base prefix (e.g. all of Phosphor's five styles)
+ * collapse into one entry with multiple `styles`.
  */
 export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibrary[] {
-  const groups = new Map<string, { base: string; author: RawCollectionInfo["author"]; license: RawCollectionInfo["license"]; entries: { prefix: string; style: string; info: RawCollectionInfo }[] }>();
+  const prefixSet = new Set(Object.keys(raw));
+  const groups = new Map<string, { prefix: string; style: string; info: RawCollectionInfo }[]>();
 
   for (const [prefix, info] of Object.entries(raw)) {
-    const { base, style } = splitNameAndStyle(info.name);
-    const key = `${info.author?.name ?? ""}::${base}`;
-    let group = groups.get(key);
-    if (!group) {
-      group = { base, author: info.author, license: info.license, entries: [] };
-      groups.set(key, group);
-    }
-    group.entries.push({ prefix, style, info });
+    const { base, style } = splitPrefixAndStyle(prefix, prefixSet);
+    const list = groups.get(base) ?? [];
+    list.push({ prefix, style, info });
+    groups.set(base, list);
   }
 
-  return Array.from(groups.values()).map((group) => {
-    const styles: LibraryStyle[] = group.entries
-      .sort((a, b) => a.style.localeCompare(b.style))
+  return Array.from(groups.entries()).map(([base, entries]) => {
+    const baseInfo = raw[base];
+    const styles: LibraryStyle[] = entries
+      .sort((a, b) => (a.style === "Default" ? -1 : b.style === "Default" ? 1 : a.style.localeCompare(b.style)))
       .map((e) => ({ prefix: e.prefix, label: e.style, total: e.info.total, version: e.info.version }));
 
-    const first = group.entries[0];
-    const totalIcons = group.entries.reduce((sum, e) => sum + e.info.total, 0);
-    const sampleIcons = (first.info.samples ?? []).slice(0, 6).map((name) => `${first.prefix}:${name}`);
+    const totalIcons = entries.reduce((sum, e) => sum + e.info.total, 0);
+    const sampleIcons = (baseInfo.samples ?? []).slice(0, 10).map((name) => `${base}:${name}`);
 
     return {
-      id: `${group.author?.name ?? "unknown"}:${group.base}`,
-      displayName: group.base,
-      author: group.author,
-      license: group.license,
-      repo: group.author?.url,
+      id: base,
+      displayName: baseInfo.name,
+      author: baseInfo.author,
+      license: baseInfo.license,
+      repo: baseInfo.author?.url,
       styles,
       totalIcons,
       sampleIcons,
     };
-  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }).sort((a, b) => popularityRank(a.id) - popularityRank(b.id) || a.displayName.localeCompare(b.displayName));
 }
 
-/** Search icons within a single library style (prefix). Requires a non-empty query — Iconify's search endpoint doesn't support browsing with no term. */
-export async function searchIconsInPrefix(prefix: string, query: string, limit = 200): Promise<IconSearchResult[]> {
-  const res = await fetch(`${API_BASE}/search?query=${encodeURIComponent(query)}&prefixes=${encodeURIComponent(prefix)}&limit=${limit}`);
-  if (!res.ok) throw new Error(`Icon search failed (${res.status})`);
-
-  const data = await res.json() as { icons: string[] };
-  return data.icons.map((icon) => {
-    const [, ...rest] = icon.split(":");
-    return { icon, prefix, name: rest.join(":") };
-  });
+export interface PrefixIndex {
+  names: string[];
+  categoryByName: Map<string, string>;
+  categories: string[];
 }
 
-/** First page of icon names in a style, for browsing before the user has typed a search — cheap, names only. */
-export async function browseIconsInPrefix(prefix: string, limit = 120): Promise<IconSearchResult[]> {
-  const names = await listAllIconsInPrefix(prefix);
-  return names.slice(0, limit).map((name) => ({ icon: `${prefix}:${name}`, prefix, name }));
-}
-
-/** List every icon name in a style (prefix), for "import entire library". */
-export async function listAllIconsInPrefix(prefix: string): Promise<string[]> {
+/**
+ * Full icon-name index for one style, with category labels — loaded once
+ * per style so search, category filtering, sorting, and pagination can all
+ * happen client-side instead of round-tripping to Iconify per keystroke.
+ */
+export async function getPrefixIndex(prefix: string): Promise<PrefixIndex> {
   const res = await fetch(`${API_BASE}/collection?prefix=${encodeURIComponent(prefix)}`);
   if (!res.ok) throw new Error(`Failed to list icons for "${prefix}" (${res.status})`);
 
@@ -119,11 +135,24 @@ export async function listAllIconsInPrefix(prefix: string): Promise<string[]> {
     categories?: Record<string, string[]>;
   };
 
-  const names = new Set<string>(data.uncategorized ?? []);
-  for (const list of Object.values(data.categories ?? {})) {
-    for (const name of list) names.add(name);
+  const categoryByName = new Map<string, string>();
+  for (const [category, list] of Object.entries(data.categories ?? {})) {
+    for (const name of list) categoryByName.set(name, category);
   }
-  return Array.from(names);
+  for (const name of data.uncategorized ?? []) {
+    if (!categoryByName.has(name)) categoryByName.set(name, "Uncategorized");
+  }
+
+  return {
+    names: Array.from(categoryByName.keys()),
+    categoryByName,
+    categories: Object.keys(data.categories ?? {}).sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+/** List every icon name in a style (prefix), for "import entire library". */
+export async function listAllIconsInPrefix(prefix: string): Promise<string[]> {
+  return (await getPrefixIndex(prefix)).names;
 }
 
 interface IconifyBulkResponse {

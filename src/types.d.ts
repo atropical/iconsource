@@ -64,14 +64,6 @@ export interface IconLibrary {
   sampleIcons: string[];
 }
 
-/** A single icon search hit within one style, before the SVG body has been fetched. */
-export interface IconSearchResult {
-  /** "<prefix>:<name>", Iconify's canonical icon id */
-  icon: string;
-  prefix: string;
-  name: string;
-}
-
 /** A fully resolved icon body, ready to insert. */
 export interface IconData {
   icon: string;
