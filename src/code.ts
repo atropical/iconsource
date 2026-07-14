@@ -3,7 +3,7 @@
 import { MessageTypes, PluginCommands, PluginMessage, TrackedIconNode } from "./types.d";
 import { findTrackedNodes, insertIconsBatch, readIconTag, updateLibraryNodes } from "./utils/iconTracking";
 
-figma.showUI(__html__, { width: 600, height: 680, themeColors: true });
+figma.showUI(__html__, { width: 760, height: 720, themeColors: true });
 
 figma.on("run", ({ command }) => {
   figma.ui.postMessage({

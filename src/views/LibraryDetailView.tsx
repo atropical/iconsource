@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Text, Input, Link, Flex, Button, SegmentedControl } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { IconGlyph } from "../components/IconGlyph";
-import { fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
+import { detectNameStyles, fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
 import { IconLibrary, MessageTypes, PluginMessage } from "../types.d";
 
 interface LibraryDetailViewProps {
@@ -24,6 +24,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
 
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
+  const [nameStyle, setNameStyle] = useState("All");
   const [sortOrder, setSortOrder] = useState<"az" | "za">("az");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<string | null>(null);
@@ -40,6 +41,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     setError(null);
     setQuery("");
     setCategory("All");
+    setNameStyle("All");
     setVisibleCount(PAGE_SIZE);
     getPrefixIndex(style.prefix)
       .then(setIndex)
@@ -65,17 +67,27 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     return () => window.removeEventListener("message", handler);
   }, []);
 
+  // Only relevant for libraries with a single Iconify-level style — see
+  // detectNameStyles for why (real style siblings already show as tabs).
+  const nameStyles = useMemo(
+    () => (index && library.styles.length === 1 ? detectNameStyles(index.names) : null),
+    [index, library.styles.length]
+  );
+
   const filteredNames = useMemo(() => {
     if (!index) return [];
     const q = query.trim().toLowerCase();
     let names = index.names;
     if (q) names = names.filter((n) => n.includes(q));
     if (category !== "All") names = names.filter((n) => index.categoryByName.get(n) === category);
+    if (nameStyles && nameStyle !== "All") {
+      names = names.filter((n) => nameStyles.styleByName.get(n) === nameStyle);
+    }
     names = [...names].sort((a, b) => (sortOrder === "az" ? a.localeCompare(b) : b.localeCompare(a)));
     return names;
-  }, [index, query, category, sortOrder]);
+  }, [index, query, category, nameStyles, nameStyle, sortOrder]);
 
-  useEffect(() => setVisibleCount(PAGE_SIZE), [query, category, sortOrder, style.prefix]);
+  useEffect(() => setVisibleCount(PAGE_SIZE), [query, category, nameStyle, sortOrder, style.prefix]);
 
   const visibleNames = filteredNames.slice(0, visibleCount);
 
@@ -192,6 +204,25 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                     ))}
                   </select>
                 )}
+                {nameStyles && (
+                  <select
+                    value={nameStyle}
+                    onChange={(e) => setNameStyle(e.target.value)}
+                    title="This library keeps its variants (outline/filled/round/etc.) as part of the icon name rather than as separate styles, so this filter is detected from the names themselves."
+                    style={{
+                      background: "var(--figma-color-bg-secondary)",
+                      border: "1px solid var(--figma-color-border)",
+                      borderRadius: 6,
+                      color: "var(--figma-color-text)",
+                      padding: "0 0.4rem",
+                    }}
+                  >
+                    <option value="All">All icon styles</option>
+                    {nameStyles.styles.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                )}
                 <SegmentedControl.Root value={sortOrder} onValueChange={(v: string) => v && setSortOrder(v as "az" | "za")}>
                   <SegmentedControl.Item value="az"><SegmentedControl.Text>A→Z</SegmentedControl.Text></SegmentedControl.Item>
                   <SegmentedControl.Item value="za"><SegmentedControl.Text>Z→A</SegmentedControl.Text></SegmentedControl.Item>
@@ -251,23 +282,22 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
         <Flex
           direction="column"
           align="center"
-          justify={selected ? "start" : "center"}
+          justify="center"
           gap="3"
           style={{
-            width: 180,
+            width: 260,
             flexShrink: 0,
             borderLeft: "1px solid var(--figma-color-border)",
             marginLeft: "1rem",
             paddingLeft: "1rem",
-            paddingTop: selected ? "1rem" : 0,
           }}
         >
           {selected ? (
             <>
               <div
                 style={{
-                  width: 96,
-                  height: 96,
+                  width: 140,
+                  height: 140,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -276,7 +306,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                   background: "var(--figma-color-bg-secondary)",
                 }}
               >
-                <IconGlyph icon={selected} size={56} color="var(--figma-color-icon)" />
+                <IconGlyph icon={selected} size={84} color="var(--figma-color-icon)" />
               </div>
               <Flex direction="column" align="center" gap="1">
                 <Text weight="strong">{selected.split(":")[1]}</Text>

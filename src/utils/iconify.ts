@@ -30,27 +30,55 @@ export function fingerprintFor(info: RawCollectionInfo): string {
 }
 
 // Trailing style suffixes Iconify uses to derive a sibling prefix from a
-// base one, e.g. "material-symbols" -> "material-symbols-light". Grouping is
-// driven by the *prefix*, not the display name: a candidate is only merged
-// when stripping the suffix yields another prefix that actually exists in
-// the dataset. This is what a purely name-based heuristic got wrong for
-// libraries like Material Icons ("ic"), whose baseline/outline/round/sharp
-// variants are separate *icon names* within one prefix, not sibling
-// prefixes — so "ic" now correctly stays a single-style library instead of
-// being misparsed from its display name. Longest phrases first so
-// "extra-bold" matches before "bold".
+// base one, e.g. "material-symbols" -> "material-symbols-light". Verified
+// against a live pull of api.iconify.design/collections (2026-07): every
+// entry here is an actual suffix pattern found across real sibling prefixes
+// — e.g. icon-park/-outline/-solid/-twotone, fluent-emoji/-flat/-high-contrast,
+// devicon/-plain, emojione/-monotone, and the streamline-<theme>/-color family.
+// Grouping is driven by the *prefix*, not the display name: a candidate is
+// only merged when stripping the suffix yields another prefix that actually
+// exists in the dataset. This is what a purely name-based heuristic got
+// wrong for libraries like classic Material Icons ("ic"), whose
+// baseline/outline/round/sharp variants are separate *icon names* within
+// one prefix, not sibling prefixes — there's no "ic-outline" collection to
+// find, so no amount of suffix-list tuning groups it; see getStyleClusters
+// in LibraryDetailView for how that class of library is handled instead.
+// Longest phrases first so "extra-bold" matches before "bold".
 const STYLE_SUFFIXES = [
   "extra-thin", "extra-bold", "extra-light", "two-tone", "sharp-filled",
-  "semi-bold", "semibold", "duotone", "outlined", "rounded", "twotone",
-  "filled", "regular", "outline", "duo", "thin", "light", "medium", "bold",
-  "black", "fill", "round", "sharp", "solid", "line", "mini", "micro",
+  "semi-bold", "semibold", "high-contrast", "baseline", "duotone",
+  "outlined", "rounded", "twotone", "monotone", "filled", "regular",
+  "outline", "duo", "thin", "light", "medium", "bold", "black", "fill",
+  "round", "sharp", "solid", "line", "mini", "micro", "color", "flat",
+  "plain",
 ];
+
+// A handful of real libraries split into sibling prefixes that share no
+// common *existing* base prefix (e.g. Font Awesome 6 is "fa6-solid" /
+// "fa6-regular" / "fa6-brands" — there is no bare "fa6" collection), so the
+// suffix-stripping heuristic above has nothing to anchor to. Verified against
+// the live collections list (2026-07); each version of Font Awesome is kept
+// as its own group rather than merged across versions.
+const PREFIX_OVERRIDES: Record<string, { base: string; baseName: string; style: string }> = {
+  "fa-solid": { base: "fa", baseName: "Font Awesome 5", style: "Solid" },
+  "fa-regular": { base: "fa", baseName: "Font Awesome 5", style: "Regular" },
+  "fa-brands": { base: "fa", baseName: "Font Awesome 5", style: "Brands" },
+  "fa6-solid": { base: "fa6", baseName: "Font Awesome 6", style: "Solid" },
+  "fa6-regular": { base: "fa6", baseName: "Font Awesome 6", style: "Regular" },
+  "fa6-brands": { base: "fa6", baseName: "Font Awesome 6", style: "Brands" },
+  "fa7-solid": { base: "fa7", baseName: "Font Awesome 7", style: "Solid" },
+  "fa7-regular": { base: "fa7", baseName: "Font Awesome 7", style: "Regular" },
+  "fa7-brands": { base: "fa7", baseName: "Font Awesome 7", style: "Brands" },
+};
 
 function titleCase(slug: string): string {
   return slug.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 }
 
 function splitPrefixAndStyle(prefix: string, prefixSet: Set<string>): { base: string; style: string } {
+  const override = PREFIX_OVERRIDES[prefix];
+  if (override) return { base: override.base, style: override.style };
+
   for (const suffix of STYLE_SUFFIXES) {
     if (prefix.endsWith(`-${suffix}`)) {
       const base = prefix.slice(0, -(suffix.length + 1));
@@ -83,7 +111,14 @@ function popularityRank(id: string): number {
  * collapse into one entry with multiple `styles`.
  */
 export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibrary[] {
+  // Virtual bases from PREFIX_OVERRIDES (e.g. "fa6") don't exist as real
+  // collections — synthesize a stand-in using the first sibling's
+  // author/license/samples so the group still has something to display.
   const prefixSet = new Set(Object.keys(raw));
+  for (const override of Object.values(PREFIX_OVERRIDES)) {
+    if (!prefixSet.has(override.base)) prefixSet.add(override.base);
+  }
+
   const groups = new Map<string, { prefix: string; style: string; info: RawCollectionInfo }[]>();
 
   for (const [prefix, info] of Object.entries(raw)) {
@@ -94,13 +129,20 @@ export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibr
   }
 
   return Array.from(groups.entries()).map(([base, entries]) => {
-    const baseInfo = raw[base];
+    const baseInfo: RawCollectionInfo = raw[base] ?? {
+      ...entries[0].info,
+      name: PREFIX_OVERRIDES[entries[0].prefix]?.baseName ?? entries[0].info.name,
+    };
     const styles: LibraryStyle[] = entries
       .sort((a, b) => (a.style === "Default" ? -1 : b.style === "Default" ? 1 : a.style.localeCompare(b.style)))
       .map((e) => ({ prefix: e.prefix, label: e.style, total: e.info.total, version: e.info.version }));
 
     const totalIcons = entries.reduce((sum, e) => sum + e.info.total, 0);
-    const sampleIcons = (baseInfo.samples ?? []).slice(0, 16).map((name) => `${base}:${name}`);
+    // Samples must be namespaced under a prefix that's actually fetchable —
+    // "base" itself may be a synthesized virtual id (see PREFIX_OVERRIDES)
+    // that doesn't exist as a real collection.
+    const samplePrefix = raw[base] ? base : entries[0].prefix;
+    const sampleIcons = (baseInfo.samples ?? []).slice(0, 16).map((name) => `${samplePrefix}:${name}`);
 
     return {
       id: base,
@@ -155,6 +197,68 @@ export async function listAllIconsInPrefix(prefix: string): Promise<string[]> {
   return (await getPrefixIndex(prefix)).names;
 }
 
+export interface NameStyleClusters {
+  styleByName: Map<string, string>;
+  styles: string[];
+}
+
+const NAME_STYLE_SUFFIX_RE = new RegExp(`[-_](${STYLE_SUFFIXES.join("|")})$`, "i");
+// Some libraries put the style first instead — classic Material Icons names
+// like "baseline-home" / "outline-home" / "round-home", not "home-outline".
+const NAME_STYLE_PREFIX_RE = new RegExp(`^(${STYLE_SUFFIXES.join("|")})[-_]`, "i");
+const NAME_STYLE_MIN_COVERAGE = 0.3;
+// A suffix only counts as a real style — not an icon that incidentally ends
+// in that word (e.g. Phosphor's "house-line" or "battery-medium" aren't
+// "Line"/"Medium" weight variants) — if it's genuinely systematic: shared by
+// a real fraction of the collection, not a handful of one-off names.
+const NAME_STYLE_MIN_SHARE = 0.05;
+
+/**
+ * Some libraries (classic Material Icons "ic", Ionicons "ion", Bootstrap
+ * Icons "bi", and — it turns out — Phosphor "ph", whose 6 weights all live
+ * in one Iconify prefix too) have no sibling style prefixes at all — their
+ * variants are separate *icon names* within one collection (e.g. "house" /
+ * "house-bold" / "house-duotone"). groupLibraries can't split these
+ * (there's nothing to split — see its comment), so this runs client-side on
+ * the already-loaded name index to detect the same pattern at the name
+ * level instead, for a "style" filter scoped to one library.
+ *
+ * Two filters keep this from firing on noise: a suffix must cover a real
+ * share of the collection (not a few incidental names), and after that,
+ * the surviving suffixes together must still cover a real share of all
+ * names and have at least two distinct styles.
+ */
+export function detectNameStyles(names: string[]): NameStyleClusters | null {
+  if (names.length === 0) return null;
+
+  const rawMatches = new Map<string, string>();
+  const countBySuffix = new Map<string, number>();
+  for (const name of names) {
+    const match = name.match(NAME_STYLE_SUFFIX_RE) ?? name.match(NAME_STYLE_PREFIX_RE);
+    if (!match) continue;
+    const suffix = match[1].toLowerCase();
+    rawMatches.set(name, suffix);
+    countBySuffix.set(suffix, (countBySuffix.get(suffix) ?? 0) + 1);
+  }
+
+  const minCount = names.length * NAME_STYLE_MIN_SHARE;
+  const keptSuffixes = new Set(
+    Array.from(countBySuffix.entries()).filter(([, count]) => count >= minCount).map(([s]) => s)
+  );
+
+  const styleByName = new Map<string, string>();
+  for (const [name, suffix] of rawMatches) {
+    if (keptSuffixes.has(suffix)) styleByName.set(name, titleCase(suffix));
+  }
+
+  if (styleByName.size / names.length < NAME_STYLE_MIN_COVERAGE) return null;
+
+  const styles = Array.from(new Set(styleByName.values())).sort((a, b) => a.localeCompare(b));
+  if (styles.length < 2) return null;
+
+  return { styleByName, styles };
+}
+
 interface IconifyBulkResponse {
   prefix: string;
   width?: number;
@@ -167,7 +271,7 @@ function buildSvg(body: string, width: number, height: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">${body}</svg>`;
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
 
