@@ -100,7 +100,7 @@ export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibr
       .map((e) => ({ prefix: e.prefix, label: e.style, total: e.info.total, version: e.info.version }));
 
     const totalIcons = entries.reduce((sum, e) => sum + e.info.total, 0);
-    const sampleIcons = (baseInfo.samples ?? []).slice(0, 10).map((name) => `${base}:${name}`);
+    const sampleIcons = (baseInfo.samples ?? []).slice(0, 16).map((name) => `${base}:${name}`);
 
     return {
       id: base,

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Text, Input, Link, Flex, SegmentedControl } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
+import { IconGlyph } from "../components/IconGlyph";
 import { getAllCollections, groupLibraries } from "../utils/iconify";
 import { IconLibrary } from "../types.d";
 
@@ -89,6 +90,7 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
             <button
               key={lib.id}
               onClick={() => onSelect(lib)}
+              className="icontopia-card"
               style={{
                 display: "flex",
                 flexDirection: "column",
@@ -97,7 +99,6 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
                 padding: "0.6rem 0.75rem",
                 border: "1px solid var(--figma-color-border)",
                 borderRadius: 6,
-                background: "var(--figma-color-bg)",
                 cursor: "pointer",
               }}
             >
@@ -109,13 +110,7 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
               </Flex>
               <Flex gap="2" align="center" wrap="wrap">
                 {lib.sampleIcons.map((icon) => (
-                  <img
-                    key={icon}
-                    src={`https://api.iconify.design/${icon.replace(":", "/")}.svg?color=currentColor`}
-                    width={28}
-                    height={28}
-                    alt=""
-                  />
+                  <IconGlyph key={icon} icon={icon} size={26} color="var(--figma-color-icon)" />
                 ))}
               </Flex>
               <Text style={{ color: "var(--figma-color-text-secondary)" }}>

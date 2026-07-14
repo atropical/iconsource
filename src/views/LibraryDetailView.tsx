@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Text, Input, Link, Flex, Button, SegmentedControl } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
+import { IconGlyph } from "../components/IconGlyph";
 import { fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
 import { IconLibrary, MessageTypes, PluginMessage } from "../types.d";
 
@@ -12,7 +13,8 @@ interface LibraryDetailViewProps {
 const LARGE_LIBRARY_THRESHOLD = 300;
 const PAGE_SIZE = 120;
 const ICON_BOX = 48;
-const ICON_SIZE = 28;
+const ICON_SIZE = 26;
+const STICKY_BG = "var(--figma-color-bg)";
 
 export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, onBack }) => {
   const [styleIndex, setStyleIndex] = useState(0);
@@ -30,7 +32,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   const [phase, setPhase] = useState<"fetching" | "inserting" | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
 
-  const gridRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const style = library.styles[styleIndex];
 
   useEffect(() => {
@@ -77,8 +79,8 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
 
   const visibleNames = filteredNames.slice(0, visibleCount);
 
-  const onGridScroll = () => {
-    const el = gridRef.current;
+  const onScroll = () => {
+    const el = scrollRef.current;
     if (!el) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
       setVisibleCount((c) => Math.min(c + PAGE_SIZE, filteredNames.length));
@@ -122,161 +124,171 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
 
   return (
     <PluginDialogShell showFooter={false}>
-      <Flex direction="column" gap="3" style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        <Flex justify="between" align="center">
-          <Link onClick={onBack} style={{ cursor: "pointer" }}>← Libraries</Link>
-          {library.repo && <Link href={library.repo} target="_blank">Repo ↗</Link>}
-        </Flex>
-
-        <Flex direction="column" gap="1">
-          <Text weight="strong">{library.displayName}</Text>
-          <Text style={{ color: "var(--figma-color-text-secondary)" }}>
-            {library.author.name} · {library.license.url ? <Link href={library.license.url} target="_blank">{library.license.title}</Link> : library.license.title}
-          </Text>
-        </Flex>
-
-        {library.styles.length > 1 && (
-          <SegmentedControl.Root
-            value={style.prefix}
-            onValueChange={(value: string) => {
-              if (!value) return;
-              const i = library.styles.findIndex((s) => s.prefix === value);
-              if (i >= 0) setStyleIndex(i);
-            }}
-            fullWidth
+      <Flex style={{ flex: 1, minHeight: 0 }}>
+        {/* Main column: sticky breadcrumb/header at top, sticky import button at bottom, icon grid scrolls between them */}
+        <Flex direction="column" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}
           >
-            {library.styles.map((s) => (
-              <SegmentedControl.Item key={s.prefix} value={s.prefix}>
-                <SegmentedControl.Text>{s.label}</SegmentedControl.Text>
-              </SegmentedControl.Item>
-            ))}
-          </SegmentedControl.Root>
-        )}
-
-        <Flex gap="2">
-          <Input
-            placeholder={`Search within ${style.label}…`}
-            value={query}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          {index && index.categories.length > 0 && (
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              style={{
-                background: "var(--figma-color-bg-secondary)",
-                border: "1px solid var(--figma-color-border)",
-                borderRadius: 6,
-                color: "var(--figma-color-text)",
-                padding: "0 0.4rem",
-              }}
+            <Flex
+              direction="column"
+              gap="3"
+              style={{ position: "sticky", top: 0, zIndex: 2, background: STICKY_BG, paddingBottom: "0.75rem" }}
             >
-              <option value="All">All categories</option>
-              {index.categories.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          )}
-          <SegmentedControl.Root value={sortOrder} onValueChange={(v: string) => v && setSortOrder(v as "az" | "za")}>
-            <SegmentedControl.Item value="az"><SegmentedControl.Text>A→Z</SegmentedControl.Text></SegmentedControl.Item>
-            <SegmentedControl.Item value="za"><SegmentedControl.Text>Z→A</SegmentedControl.Text></SegmentedControl.Item>
-          </SegmentedControl.Root>
+              <Flex justify="between" align="center">
+                <Link onClick={onBack} style={{ cursor: "pointer" }}>← Libraries</Link>
+                {library.repo && <Link href={library.repo} target="_blank">Repo ↗</Link>}
+              </Flex>
+
+              <Flex direction="column" gap="1">
+                <Text weight="strong">{library.displayName}</Text>
+                <Text style={{ color: "var(--figma-color-text-secondary)" }}>
+                  {library.author.name} · {library.license.url ? <Link href={library.license.url} target="_blank">{library.license.title}</Link> : library.license.title}
+                </Text>
+              </Flex>
+
+              {library.styles.length > 1 && (
+                <SegmentedControl.Root
+                  value={style.prefix}
+                  onValueChange={(value: string) => {
+                    if (!value) return;
+                    const i = library.styles.findIndex((s) => s.prefix === value);
+                    if (i >= 0) setStyleIndex(i);
+                  }}
+                  fullWidth
+                >
+                  {library.styles.map((s) => (
+                    <SegmentedControl.Item key={s.prefix} value={s.prefix}>
+                      <SegmentedControl.Text>{s.label}</SegmentedControl.Text>
+                    </SegmentedControl.Item>
+                  ))}
+                </SegmentedControl.Root>
+              )}
+
+              <Flex gap="2">
+                <Input
+                  placeholder={`Search within ${style.label}…`}
+                  value={query}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                {index && index.categories.length > 0 && (
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    style={{
+                      background: "var(--figma-color-bg-secondary)",
+                      border: "1px solid var(--figma-color-border)",
+                      borderRadius: 6,
+                      color: "var(--figma-color-text)",
+                      padding: "0 0.4rem",
+                    }}
+                  >
+                    <option value="All">All categories</option>
+                    {index.categories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+                <SegmentedControl.Root value={sortOrder} onValueChange={(v: string) => v && setSortOrder(v as "az" | "za")}>
+                  <SegmentedControl.Item value="az"><SegmentedControl.Text>A→Z</SegmentedControl.Text></SegmentedControl.Item>
+                  <SegmentedControl.Item value="za"><SegmentedControl.Text>Z→A</SegmentedControl.Text></SegmentedControl.Item>
+                </SegmentedControl.Root>
+              </Flex>
+
+              {error && <Text style={{ color: "var(--figma-color-text-danger)" }}>{error}</Text>}
+
+              <Text style={{ color: "var(--figma-color-text-secondary)" }}>
+                {indexLoading ? "Loading icon index…" : `${filteredNames.length.toLocaleString()} icon${filteredNames.length === 1 ? "" : "s"}`}
+              </Text>
+            </Flex>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {visibleNames.map((name) => {
+                const icon = `${style.prefix}:${name}`;
+                return (
+                  <button
+                    key={icon}
+                    onClick={() => setSelected(icon)}
+                    title={icon}
+                    className="icontopia-icon-cell"
+                    data-selected={selected === icon}
+                    style={{
+                      width: ICON_BOX,
+                      height: ICON_BOX,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      border: "1px solid var(--figma-color-border)",
+                      borderRadius: 6,
+                      background: "var(--figma-color-bg-secondary)",
+                      cursor: "pointer",
+                      padding: 0,
+                      color: "var(--figma-color-icon)",
+                    }}
+                  >
+                    <IconGlyph icon={icon} size={ICON_SIZE} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ position: "sticky", bottom: 0, background: STICKY_BG, paddingTop: "0.75rem" }}>
+            <Button variant="primary" size="medium" fullWidth onClick={importStyle} disabled={importing}>
+              {importing
+                ? phase === "fetching"
+                  ? `Fetching icons… ${progress.done}/${progress.total}`
+                  : `Inserting icons… ${progress.done}/${progress.total}`
+                : `Import all ${style.total.toLocaleString()} icons (${style.label})`}
+            </Button>
+          </div>
         </Flex>
 
-        {error && <Text style={{ color: "var(--figma-color-text-danger)" }}>{error}</Text>}
-
-        <Text style={{ color: "var(--figma-color-text-secondary)" }}>
-          {indexLoading ? "Loading icon index…" : `${filteredNames.length.toLocaleString()} icon${filteredNames.length === 1 ? "" : "s"}`}
-        </Text>
-
-        <div
-          ref={gridRef}
-          onScroll={onGridScroll}
+        {/* Side panel: always-visible glyph specimen, like a typeface specimen sheet */}
+        <Flex
+          direction="column"
+          align="center"
+          justify={selected ? "start" : "center"}
+          gap="3"
           style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignContent: "flex-start",
+            width: 180,
+            flexShrink: 0,
+            borderLeft: "1px solid var(--figma-color-border)",
+            marginLeft: "1rem",
+            paddingLeft: "1rem",
+            paddingTop: selected ? "1rem" : 0,
           }}
         >
-          {visibleNames.map((name) => {
-            const icon = `${style.prefix}:${name}`;
-            return (
-              <button
-                key={icon}
-                onClick={() => setSelected(icon)}
-                title={icon}
+          {selected ? (
+            <>
+              <div
                 style={{
-                  width: ICON_BOX,
-                  height: ICON_BOX,
+                  width: 96,
+                  height: 96,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   border: "1px solid var(--figma-color-border)",
-                  borderRadius: 6,
+                  borderRadius: 8,
                   background: "var(--figma-color-bg-secondary)",
-                  cursor: "pointer",
-                  padding: 0,
                 }}
               >
-                <img src={`https://api.iconify.design/${style.prefix}/${name}.svg?color=currentColor`} width={ICON_SIZE} height={ICON_SIZE} alt={icon} />
-              </button>
-            );
-          })}
-        </div>
-
-        <Button variant="primary" size="medium" fullWidth onClick={importStyle} disabled={importing}>
-          {importing
-            ? phase === "fetching"
-              ? `Fetching icons… ${progress.done}/${progress.total}`
-              : `Inserting icons… ${progress.done}/${progress.total}`
-            : `Import all ${style.total.toLocaleString()} icons (${style.label})`}
-        </Button>
-
-        {selected && (
-          <div
-            onClick={() => setSelected(null)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.4)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 10,
-            }}
-          >
-            <Flex
-              direction="column"
-              align="center"
-              gap="3"
-              onClick={(e: React.MouseEvent) => e.stopPropagation()}
-              style={{
-                background: "var(--figma-color-bg)",
-                border: "1px solid var(--figma-color-border)",
-                borderRadius: 12,
-                padding: "2.5rem",
-                minWidth: 220,
-              }}
-            >
-              <img
-                src={`https://api.iconify.design/${selected.replace(":", "/")}.svg?color=currentColor`}
-                width={112}
-                height={112}
-                alt={selected}
-              />
+                <IconGlyph icon={selected} size={56} color="var(--figma-color-icon)" />
+              </div>
               <Flex direction="column" align="center" gap="1">
                 <Text weight="strong">{selected.split(":")[1]}</Text>
-                <Text style={{ color: "var(--figma-color-text-secondary)" }}>{selected}</Text>
+                <Text style={{ color: "var(--figma-color-text-secondary)", wordBreak: "break-all", textAlign: "center" }}>{selected}</Text>
               </Flex>
-              <Link onClick={() => setSelected(null)} style={{ cursor: "pointer" }}>Close</Link>
-            </Flex>
-          </div>
-        )}
+            </>
+          ) : (
+            <Text style={{ color: "var(--figma-color-text-secondary)", textAlign: "center" }}>
+              Click an icon to preview it here
+            </Text>
+          )}
+        </Flex>
       </Flex>
     </PluginDialogShell>
   );
