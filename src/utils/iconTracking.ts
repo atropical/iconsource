@@ -7,12 +7,24 @@
  * compare it against the live Iconify SVG, and swap geometry in place
  * without deleting/recreating the node — preserving its id, position, size,
  * and any fill colours the user applied after import.
+ *
+ * Sync is scoped per library style (Iconify prefix): every icon imported
+ * from the same style shares one `libraryFingerprint` (see
+ * utils/iconify.ts's fingerprintFor), so "check for updates" only needs one
+ * cheap collection-metadata lookup per style, not one per icon.
  */
+
+interface IconInput {
+  icon: string;
+  prefix: string;
+  name: string;
+  svg: string;
+}
 
 const NS = "icontopia";
 const KEY_ICON = `${NS}:icon`; // "<prefix>:<name>"
 const KEY_HASH = `${NS}:svgHash`;
-const KEY_VERSION = `${NS}:version`;
+const KEY_FINGERPRINT = `${NS}:libraryFingerprint`;
 
 /** Cheap, deterministic string hash (djb2) — good enough for change detection, not a security primitive. */
 export function hashString(input: string): string {
@@ -28,7 +40,7 @@ export interface IconTag {
   prefix: string;
   name: string;
   svgHash: string;
-  version?: string;
+  libraryFingerprint: string;
 }
 
 export function readIconTag(node: SceneNode): IconTag | null {
@@ -37,31 +49,74 @@ export function readIconTag(node: SceneNode): IconTag | null {
   if (!icon || !svgHash) return null;
 
   const [prefix, ...rest] = icon.split(":");
-  const version = node.getPluginData(KEY_VERSION);
+  const libraryFingerprint = node.getPluginData(KEY_FINGERPRINT);
 
-  return { icon, prefix, name: rest.join(":"), svgHash, version: version || undefined };
+  return { icon, prefix, name: rest.join(":"), svgHash, libraryFingerprint };
 }
 
-function tagIconNode(node: SceneNode, icon: string, svgHash: string, version?: string): void {
+function tagIconNode(node: SceneNode, icon: string, svgHash: string, libraryFingerprint: string): void {
   node.setPluginData(KEY_ICON, icon);
   node.setPluginData(KEY_HASH, svgHash);
-  node.setPluginData(KEY_VERSION, version ?? "");
+  node.setPluginData(KEY_FINGERPRINT, libraryFingerprint);
 }
 
-/** Insert a freshly fetched icon SVG into the current page, tagged for future update checks. */
-export function insertIcon(svg: string, icon: string, version?: string): SceneNode {
-  const node = figma.createNodeFromSvg(svg);
-  node.name = icon;
+const GRID_COLUMNS = 16;
+const GRID_CELL = 40;
+const ICON_TARGET_SIZE = 24;
+
+/**
+ * Insert a batch of icons (a search-result subset, or an entire library
+ * style) as a grid inside one frame, tagging each icon individually.
+ * Runs in chunks with a `setTimeout(0)` yield between them so the Figma UI
+ * thread stays responsive on large libraries, and reports progress via
+ * `onProgress` so the caller can show it.
+ */
+export async function insertIconsBatch(
+  icons: IconInput[],
+  libraryFingerprint: string,
+  frameName: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<FrameNode> {
+  const frame = figma.createFrame();
+  frame.name = frameName;
+  frame.fills = [];
+
+  const columns = Math.min(GRID_COLUMNS, Math.max(1, icons.length));
+  const rows = Math.max(1, Math.ceil(icons.length / columns));
+  frame.resize(columns * GRID_CELL, rows * GRID_CELL);
 
   const viewport = figma.viewport.center;
-  node.x = viewport.x - node.width / 2;
-  node.y = viewport.y - node.height / 2;
+  frame.x = viewport.x - frame.width / 2;
+  frame.y = viewport.y - frame.height / 2;
+  figma.currentPage.appendChild(frame);
 
-  figma.currentPage.appendChild(node);
-  tagIconNode(node, icon, hashString(svg), version);
-  figma.currentPage.selection = [node];
+  for (let i = 0; i < icons.length; i++) {
+    const data = icons[i];
+    const node = figma.createNodeFromSvg(data.svg);
 
-  return node;
+    const scale = ICON_TARGET_SIZE / Math.max(node.width, node.height, 1);
+    node.resize(node.width * scale, node.height * scale);
+
+    const col = i % columns;
+    const row = Math.floor(i / columns);
+    node.x = col * GRID_CELL + (GRID_CELL - node.width) / 2;
+    node.y = row * GRID_CELL + (GRID_CELL - node.height) / 2;
+    node.name = data.icon;
+
+    frame.appendChild(node);
+    tagIconNode(node, data.icon, hashString(data.svg), libraryFingerprint);
+
+    if (i % 25 === 24) {
+      onProgress?.(i + 1, icons.length);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  onProgress?.(icons.length, icons.length);
+  figma.currentPage.selection = [frame];
+  figma.viewport.scrollAndZoomIntoView([frame]);
+
+  return frame;
 }
 
 /** Recursively find every node on every page tagged as an Icontopia-imported icon. */
@@ -124,10 +179,11 @@ export interface UpdateResult {
  * inner vector paths are swapped. User-applied colours are captured before
  * the swap and reapplied by traversal order afterwards.
  */
-export function updateIconNode(existing: SceneNode, newSvg: string, icon: string, version?: string): UpdateResult {
+export function updateIconNode(existing: SceneNode, newSvg: string, icon: string, libraryFingerprint: string): UpdateResult {
   const newHash = hashString(newSvg);
   const tag = readIconTag(existing);
   if (tag && tag.svgHash === newHash) {
+    tagIconNode(existing, icon, newHash, libraryFingerprint); // fingerprint may still have advanced even if this icon's own SVG didn't change
     return { node: existing, changed: false };
   }
 
@@ -154,8 +210,38 @@ export function updateIconNode(existing: SceneNode, newSvg: string, icon: string
   if ("resize" in existing) (existing as LayoutMixin).resize(newWidth, newHeight);
 
   applyFills(existing, fills);
-  tagIconNode(existing, icon, newHash, version);
-  figma.currentPage.selection = [existing];
+  tagIconNode(existing, icon, newHash, libraryFingerprint);
 
   return { node: existing, changed: true };
+}
+
+/**
+ * Update every tracked node from one library style in place. `freshByName`
+ * maps bare icon name -> freshly fetched IconData for that prefix.
+ */
+export async function updateLibraryNodes(
+  nodes: SceneNode[],
+  freshByName: Map<string, IconInput>,
+  libraryFingerprint: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<{ updated: number }> {
+  let updated = 0;
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const tag = readIconTag(node);
+    const fresh = tag && freshByName.get(tag.name);
+    if (tag && fresh) {
+      const result = updateIconNode(node, fresh.svg, fresh.icon, libraryFingerprint);
+      if (result.changed) updated++;
+    }
+
+    if (i % 25 === 24) {
+      onProgress?.(i + 1, nodes.length);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  onProgress?.(nodes.length, nodes.length);
+  return { updated };
 }

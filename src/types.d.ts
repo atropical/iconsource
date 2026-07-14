@@ -16,48 +16,55 @@ export enum MessageTypes {
   GET_BASIC_INFO = "INFO.GET_BASIC_INFO",
   BASIC_INFO = "INFO.BASIC_INFO",
 
-  // Import
-  IMPORT_ICON_REQUEST = "IMPORT.ICON.REQUEST",
-  IMPORT_ICON_RESULT = "IMPORT.ICON.RESULT",
+  // Import a handful of individually-picked icons (search results within a style)
+  IMPORT_ICONS_REQUEST = "IMPORT.ICONS.REQUEST",
+  IMPORT_PROGRESS = "IMPORT.PROGRESS",
+  IMPORT_RESULT = "IMPORT.RESULT",
   IMPORT_ERROR = "IMPORT.ERROR",
 
-  // Update tracking
+  // Update tracking, grouped by library style (prefix)
   SCAN_TRACKED_REQUEST = "UPDATE.SCAN.REQUEST",
   SCAN_TRACKED_RESULT = "UPDATE.SCAN.RESULT",
-  UPDATE_ICON_REQUEST = "UPDATE.ICON.REQUEST",
-  UPDATE_ICON_RESULT = "UPDATE.ICON.RESULT",
+  UPDATE_LIBRARY_REQUEST = "UPDATE.LIBRARY.REQUEST",
+  UPDATE_PROGRESS = "UPDATE.PROGRESS",
+  UPDATE_RESULT = "UPDATE.RESULT",
   UPDATE_ERROR = "UPDATE.ERROR",
 
-  // Selection sync (for showing which tracked node is selected)
+  // Selection sync (for jumping to a tracked node on the canvas)
   SELECT_NODE_REQUEST = "SELECT.NODE.REQUEST",
 }
 
-/**
- * License metadata for an icon collection, as surfaced by Iconify.
- */
+/** License metadata for an icon collection, as surfaced by Iconify. */
 export interface IconLicense {
   title: string;
   spdx?: string;
   url?: string;
 }
 
-/**
- * Metadata about a single icon collection/library (e.g. "lucide", "ph", "tabler").
- */
-export interface IconCollectionInfo {
+/** One style/prefix within a library, e.g. "Phosphor Bold" (prefix "ph-bold") inside the "Phosphor" library. */
+export interface LibraryStyle {
   prefix: string;
-  name: string;
+  /** Style label with the shared library name stripped, e.g. "Bold", "Duotone", or "Default" when the set has only one style. */
+  label: string;
   total: number;
-  author: { name: string; url?: string };
-  license: IconLicense;
-  /** Repo URL, when Iconify exposes one for the collection's author/samples. */
-  repo?: string;
-  /** Iconify's own per-collection version string, when available. Informational only —
-   * the SVG content hash is what actually drives update detection. */
+  /** Iconify's own version string for this prefix, when available. */
   version?: string;
 }
 
-/** A single icon search hit, before the SVG body has been fetched. */
+/** A browsable icon library — one or more Iconify prefixes grouped by shared name/author, e.g. all of Phosphor's styles. */
+export interface IconLibrary {
+  id: string;
+  displayName: string;
+  author: { name: string; url?: string };
+  license: IconLicense;
+  repo?: string;
+  styles: LibraryStyle[];
+  totalIcons: number;
+  /** A handful of icon ids (from the default style) to render as a preview. */
+  sampleIcons: string[];
+}
+
+/** A single icon search hit within one style, before the SVG body has been fetched. */
 export interface IconSearchResult {
   /** "<prefix>:<name>", Iconify's canonical icon id */
   icon: string;
@@ -65,13 +72,12 @@ export interface IconSearchResult {
   name: string;
 }
 
-/** A fully resolved icon, ready to preview or import. */
-export interface IconPreview {
+/** A fully resolved icon body, ready to insert. */
+export interface IconData {
   icon: string;
   prefix: string;
   name: string;
   svg: string;
-  collection: IconCollectionInfo;
 }
 
 /**
@@ -86,8 +92,17 @@ export interface TrackedIconNode {
   prefix: string;
   iconName: string;
   svgHash: string;
-  importedVersion?: string;
-  /** Set once the plugin has checked and found the live SVG hash differs. */
+  libraryFingerprint: string;
+}
+
+/** Tracked icons grouped by the library style (prefix) they came from, for library-level sync. */
+export interface TrackedLibraryGroup {
+  prefix: string;
+  icons: TrackedIconNode[];
+  /** The fingerprint stored at import time (all icons in a group share one, from the last import/update of that prefix). */
+  importedFingerprint: string;
+  /** Filled in by the UI after comparing importedFingerprint to the live one. */
+  currentFingerprint?: string;
   updateAvailable?: boolean;
 }
 
@@ -97,11 +112,17 @@ export interface PluginMessage {
   editorType?: string;
 
   // Import
-  icon?: IconPreview;
-  nodeId?: string;
+  icons?: IconData[];
+  libraryFingerprint?: string;
+  imported?: number;
+  total?: number;
   error?: string;
 
   // Update scan/apply
   tracked?: TrackedIconNode[];
-  updatedSvg?: string;
+  prefix?: string;
+  updated?: number;
+
+  // Selection sync
+  nodeId?: string;
 }

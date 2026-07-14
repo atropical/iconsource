@@ -1,9 +1,19 @@
 import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import "figma-kit/styles.css";
-import { PluginCommands, MessageTypes, PluginMessage } from "./types.d";
-import { BrowseView } from "./views/BrowseView";
+import { PluginCommands, MessageTypes, PluginMessage, IconLibrary } from "./types.d";
+import { LibrariesView } from "./views/LibrariesView";
+import { LibraryDetailView } from "./views/LibraryDetailView";
 import { UpdateView } from "./views/UpdateView";
+
+const BrowseFlow: React.FC = () => {
+    const [selected, setSelected] = useState<IconLibrary | null>(null);
+
+    if (selected) {
+        return <LibraryDetailView library={selected} onBack={() => setSelected(null)} />;
+    }
+    return <LibrariesView onSelect={setSelected} />;
+};
 
 const App: React.FC = () => {
     const [command, setCommand] = useState<PluginCommands>(PluginCommands.BROWSE);
@@ -24,7 +34,7 @@ const App: React.FC = () => {
             return <UpdateView />;
         case PluginCommands.BROWSE:
         default:
-            return <BrowseView />;
+            return <BrowseFlow />;
     }
 };
 

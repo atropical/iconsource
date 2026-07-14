@@ -1,9 +1,9 @@
 /// <reference types="@figma/plugin-typings" />
 
 import { MessageTypes, PluginCommands, PluginMessage, TrackedIconNode } from "./types.d";
-import { findTrackedNodes, insertIcon, readIconTag, updateIconNode } from "./utils/iconTracking";
+import { findTrackedNodes, insertIconsBatch, readIconTag, updateLibraryNodes } from "./utils/iconTracking";
 
-figma.showUI(__html__, { width: 420, height: 600, themeColors: true });
+figma.showUI(__html__, { width: 480, height: 640, themeColors: true });
 
 figma.on("run", ({ command }) => {
   figma.ui.postMessage({
@@ -13,19 +13,21 @@ figma.on("run", ({ command }) => {
   } as PluginMessage);
 });
 
-function handleImport(msg: PluginMessage) {
-  if (!msg.icon) {
-    console.error("Import request missing icon data");
+async function handleImportIcons(msg: PluginMessage) {
+  if (!msg.icons || msg.icons.length === 0 || !msg.libraryFingerprint) {
+    console.error("Import request missing icons or libraryFingerprint");
     return;
   }
 
   try {
-    const node = insertIcon(msg.icon.svg, msg.icon.icon, msg.icon.collection.version);
-    figma.ui.postMessage({
-      type: MessageTypes.IMPORT_ICON_RESULT,
-      nodeId: node.id,
-    } as PluginMessage);
-    figma.notify(`✅ Imported ${msg.icon.icon}`);
+    const frameName = msg.icons.length === 1 ? msg.icons[0].icon : `${msg.icons[0].prefix} (${msg.icons.length} icons)`;
+
+    await insertIconsBatch(msg.icons, msg.libraryFingerprint, frameName, (done, total) => {
+      figma.ui.postMessage({ type: MessageTypes.IMPORT_PROGRESS, imported: done, total } as PluginMessage);
+    });
+
+    figma.ui.postMessage({ type: MessageTypes.IMPORT_RESULT, imported: msg.icons.length, total: msg.icons.length } as PluginMessage);
+    figma.notify(`✅ Imported ${msg.icons.length} icon${msg.icons.length === 1 ? "" : "s"}`);
   } catch (error) {
     console.error(error);
     figma.ui.postMessage({
@@ -48,35 +50,30 @@ function handleScanTracked() {
         prefix: tag.prefix,
         iconName: tag.name,
         svgHash: tag.svgHash,
-        importedVersion: tag.version,
+        libraryFingerprint: tag.libraryFingerprint,
       } as TrackedIconNode;
     })
     .filter((t): t is TrackedIconNode => t !== null);
 
-  figma.ui.postMessage({
-    type: MessageTypes.SCAN_TRACKED_RESULT,
-    tracked,
-  } as PluginMessage);
+  figma.ui.postMessage({ type: MessageTypes.SCAN_TRACKED_RESULT, tracked } as PluginMessage);
 }
 
-function handleUpdateIcon(msg: PluginMessage) {
-  if (!msg.nodeId || !msg.updatedSvg || !msg.icon) {
-    console.error("Update request missing nodeId, svg, or icon data");
+async function handleUpdateLibrary(msg: PluginMessage) {
+  if (!msg.prefix || !msg.icons || !msg.libraryFingerprint) {
+    console.error("Update request missing prefix, icons, or libraryFingerprint");
     return;
   }
 
   try {
-    const node = figma.getNodeById(msg.nodeId) as SceneNode | null;
-    if (!node) throw new Error("That icon's node no longer exists in this document.");
+    const nodes = findTrackedNodes().filter((node) => readIconTag(node)?.prefix === msg.prefix);
+    const freshByName = new Map(msg.icons.map((icon) => [icon.name, icon]));
 
-    const result = updateIconNode(node, msg.updatedSvg, msg.icon.icon, msg.icon.collection.version);
+    const { updated } = await updateLibraryNodes(nodes, freshByName, msg.libraryFingerprint, (done, total) => {
+      figma.ui.postMessage({ type: MessageTypes.UPDATE_PROGRESS, imported: done, total } as PluginMessage);
+    });
 
-    figma.ui.postMessage({
-      type: MessageTypes.UPDATE_ICON_RESULT,
-      nodeId: result.node.id,
-    } as PluginMessage);
-
-    figma.notify(result.changed ? `✅ Updated ${msg.icon.icon}` : `${msg.icon.icon} is already up to date`);
+    figma.ui.postMessage({ type: MessageTypes.UPDATE_RESULT, prefix: msg.prefix, updated } as PluginMessage);
+    figma.notify(updated > 0 ? `✅ Updated ${updated} icon${updated === 1 ? "" : "s"} in ${msg.prefix}` : `${msg.prefix} is already up to date`);
   } catch (error) {
     console.error(error);
     figma.ui.postMessage({
@@ -103,16 +100,16 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       } as PluginMessage);
       break;
 
-    case MessageTypes.IMPORT_ICON_REQUEST:
-      handleImport(msg);
+    case MessageTypes.IMPORT_ICONS_REQUEST:
+      await handleImportIcons(msg);
       break;
 
     case MessageTypes.SCAN_TRACKED_REQUEST:
       handleScanTracked();
       break;
 
-    case MessageTypes.UPDATE_ICON_REQUEST:
-      handleUpdateIcon(msg);
+    case MessageTypes.UPDATE_LIBRARY_REQUEST:
+      await handleUpdateLibrary(msg);
       break;
 
     case MessageTypes.SELECT_NODE_REQUEST:

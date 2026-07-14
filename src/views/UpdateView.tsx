@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { Text, Link, Flex, Button } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
-import { getIconSvg, resolveIconPreview } from "../utils/iconify";
-import { hashString } from "../utils/iconTracking";
-import { MessageTypes, PluginMessage, TrackedIconNode } from "../types.d";
+import { fetchIconData, fingerprintFor, getAllCollections } from "../utils/iconify";
+import { MessageTypes, PluginMessage, TrackedIconNode, TrackedLibraryGroup } from "../types.d";
 
 export const UpdateView: React.FC = () => {
-  const [tracked, setTracked] = useState<TrackedIconNode[]>([]);
+  const [groups, setGroups] = useState<TrackedLibraryGroup[]>([]);
   const [checking, setChecking] = useState(true);
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [updatingPrefix, setUpdatingPrefix] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -16,25 +16,21 @@ export const UpdateView: React.FC = () => {
 
     const handler = async ({ data: { pluginMessage } }: { data: { pluginMessage: PluginMessage } }) => {
       if (pluginMessage.type === MessageTypes.SCAN_TRACKED_RESULT && pluginMessage.tracked) {
-        const list = pluginMessage.tracked;
         setChecking(true);
-        const withStatus = await Promise.all(
-          list.map(async (item) => {
-            try {
-              const liveSvg = await getIconSvg(item.prefix, item.iconName);
-              return { ...item, updateAvailable: hashString(liveSvg) !== item.svgHash };
-            } catch {
-              return item; // unreachable/renamed icon — leave status unknown, not blocking
-            }
-          })
-        );
-        setTracked(withStatus);
-        setChecking(false);
-      } else if (pluginMessage.type === MessageTypes.UPDATE_ICON_RESULT) {
-        setUpdatingId(null);
+        try {
+          setGroups(await buildGroups(pluginMessage.tracked));
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Failed to check for updates");
+        } finally {
+          setChecking(false);
+        }
+      } else if (pluginMessage.type === MessageTypes.UPDATE_PROGRESS) {
+        setProgress({ done: pluginMessage.imported ?? 0, total: pluginMessage.total ?? 0 });
+      } else if (pluginMessage.type === MessageTypes.UPDATE_RESULT) {
+        setUpdatingPrefix(null);
         parent.postMessage({ pluginMessage: { type: MessageTypes.SCAN_TRACKED_REQUEST } as PluginMessage }, "*");
       } else if (pluginMessage.type === MessageTypes.UPDATE_ERROR) {
-        setUpdatingId(null);
+        setUpdatingPrefix(null);
         setError(pluginMessage.error ?? "Update failed");
       }
     };
@@ -43,24 +39,54 @@ export const UpdateView: React.FC = () => {
     return () => window.removeEventListener("message", handler);
   }, []);
 
-  const updateOne = async (item: TrackedIconNode) => {
+  const buildGroups = async (tracked: TrackedIconNode[]): Promise<TrackedLibraryGroup[]> => {
+    const byPrefix = new Map<string, TrackedIconNode[]>();
+    for (const item of tracked) {
+      const list = byPrefix.get(item.prefix) ?? [];
+      list.push(item);
+      byPrefix.set(item.prefix, list);
+    }
+
+    const collections = await getAllCollections();
+
+    return Array.from(byPrefix.entries()).map(([prefix, icons]) => {
+      const info = collections[prefix];
+      const currentFingerprint = info ? fingerprintFor(info) : undefined;
+      const importedFingerprint = icons[0]?.libraryFingerprint ?? "";
+
+      return {
+        prefix,
+        icons,
+        importedFingerprint,
+        currentFingerprint,
+        updateAvailable: currentFingerprint !== undefined && currentFingerprint !== importedFingerprint,
+      };
+    });
+  };
+
+  const updateGroup = async (group: TrackedLibraryGroup) => {
+    if (!group.currentFingerprint) return;
     setError(null);
-    setUpdatingId(item.nodeId);
+    setUpdatingPrefix(group.prefix);
+    setProgress({ done: 0, total: group.icons.length });
+
     try {
-      const preview = await resolveIconPreview(item.prefix, item.iconName);
+      const names = group.icons.map((i) => i.iconName);
+      const icons = await fetchIconData(group.prefix, names, (done, total) => setProgress({ done, total }));
+
       parent.postMessage(
         {
           pluginMessage: {
-            type: MessageTypes.UPDATE_ICON_REQUEST,
-            nodeId: item.nodeId,
-            icon: preview,
-            updatedSvg: preview.svg,
+            type: MessageTypes.UPDATE_LIBRARY_REQUEST,
+            prefix: group.prefix,
+            icons,
+            libraryFingerprint: group.currentFingerprint,
           } as PluginMessage,
         },
         "*"
       );
     } catch (e) {
-      setUpdatingId(null);
+      setUpdatingPrefix(null);
       setError(e instanceof Error ? e.message : "Update failed");
     }
   };
@@ -69,46 +95,57 @@ export const UpdateView: React.FC = () => {
     parent.postMessage({ pluginMessage: { type: MessageTypes.SELECT_NODE_REQUEST, nodeId } as PluginMessage }, "*");
   };
 
-  const outdated = tracked.filter((t) => t.updateAvailable);
+  const outdated = groups.filter((g) => g.updateAvailable);
 
   return (
     <PluginDialogShell>
       <Flex direction="column" gap="3" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        <Text weight="strong">Icons in this document</Text>
+        <Text weight="strong">Libraries imported into this document</Text>
         {error && <Text style={{ color: "var(--figma-color-text-danger)" }}>{error}</Text>}
         {checking && <Text style={{ color: "var(--figma-color-text-secondary)" }}>Checking for updates…</Text>}
 
-        {!checking && tracked.length === 0 && (
+        {!checking && groups.length === 0 && (
           <Text style={{ color: "var(--figma-color-text-secondary)" }}>
             No Icontopia-imported icons found in this document yet.
           </Text>
         )}
 
-        {!checking && tracked.length > 0 && (
+        {!checking && groups.length > 0 && (
           <Text style={{ color: "var(--figma-color-text-secondary)" }}>
-            {outdated.length === 0 ? "Everything is up to date." : `${outdated.length} icon(s) have updates available.`}
+            {outdated.length === 0 ? "Everything is up to date." : `${outdated.length} librar${outdated.length === 1 ? "y has" : "ies have"} updates available.`}
           </Text>
         )}
 
-        {tracked.map((item) => (
+        {groups.map((group) => (
           <Flex
-            key={item.nodeId}
-            justify="between"
-            align="center"
+            key={group.prefix}
+            direction="column"
             gap="2"
-            style={{ padding: "0.5rem 0.75rem", border: "1px solid var(--figma-color-border)", borderRadius: 6 }}
+            style={{ padding: "0.6rem 0.75rem", border: "1px solid var(--figma-color-border)", borderRadius: 6 }}
           >
-            <Flex direction="column" gap="1">
-              <Link onClick={() => jumpTo(item.nodeId)} style={{ cursor: "pointer" }}>{item.name}</Link>
-              <Text style={{ color: "var(--figma-color-text-secondary)" }}>{item.icon}</Text>
+            <Flex justify="between" align="center">
+              <Flex direction="column" gap="1">
+                <Text weight="strong">{group.prefix}</Text>
+                <Text style={{ color: "var(--figma-color-text-secondary)" }}>{group.icons.length} icon{group.icons.length === 1 ? "" : "s"} in this document</Text>
+              </Flex>
+              {group.updateAvailable ? (
+                <Button onClick={() => updateGroup(group)} disabled={updatingPrefix === group.prefix}>
+                  {updatingPrefix === group.prefix ? `Updating… ${progress.done}/${progress.total}` : "Update library"}
+                </Button>
+              ) : (
+                <Text style={{ color: "var(--figma-color-text-secondary)" }}>Up to date</Text>
+              )}
             </Flex>
-            {item.updateAvailable ? (
-              <Button onClick={() => updateOne(item)} disabled={updatingId === item.nodeId}>
-                {updatingId === item.nodeId ? "Updating…" : "Update"}
-              </Button>
-            ) : (
-              <Text style={{ color: "var(--figma-color-text-secondary)" }}>Up to date</Text>
-            )}
+            <Flex gap="1" wrap="wrap">
+              {group.icons.slice(0, 12).map((icon) => (
+                <Link key={icon.nodeId} onClick={() => jumpTo(icon.nodeId)} style={{ cursor: "pointer" }}>
+                  {icon.iconName}
+                </Link>
+              ))}
+              {group.icons.length > 12 && (
+                <Text style={{ color: "var(--figma-color-text-secondary)" }}>+{group.icons.length - 12} more</Text>
+              )}
+            </Flex>
           </Flex>
         ))}
       </Flex>
