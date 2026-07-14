@@ -70,8 +70,8 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   // Only relevant for libraries with a single Iconify-level style — see
   // detectNameStyles for why (real style siblings already show as tabs).
   const nameStyles = useMemo(
-    () => (index && library.styles.length === 1 ? detectNameStyles(index.names) : null),
-    [index, library.styles.length]
+    () => (index && library.styles.length === 1 ? detectNameStyles(index.names, style.prefix) : null),
+    [index, library.styles.length, style.prefix]
   );
 
   const filteredNames = useMemo(() => {

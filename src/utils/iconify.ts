@@ -202,6 +202,97 @@ export interface NameStyleClusters {
   styles: string[];
 }
 
+interface NameStyleRule {
+  label: string;
+  pattern: RegExp;
+}
+
+// Explicit, individually-verified style rules for popular libraries whose
+// variants live inside the icon name rather than as separate Iconify
+// prefixes. The generic word-list heuristic below gets some of these
+// actively *wrong* — checked against live icon-name data (2026-07):
+//   - Solar's real styles are "Bold Duotone" and "Line Duotone" (compound),
+//     not a generic "Duotone" — the generic matcher would merge both into
+//     one bucket and lose the distinction.
+//   - Tabler's "-off" suffix (520 icons, e.g. "wifi-off") clears the
+//     generic 5% share threshold but isn't a style at all — it's a
+//     different icon. Only "-filled" (1053 icons) is a real second style.
+//   - Heroicons packs two axes into one suffix (outline/solid × size), so a
+//     single trailing-word match can't separate "24px solid" from
+//     "20px solid" (Mini) from "16px solid" (Micro) correctly.
+// Rules run in order, first match wins — compound patterns are listed
+// before the shorter ones they'd otherwise be swallowed by. `defaultLabel`
+// covers everything left over: real repo docs confirm these libraries all
+// treat the unsuffixed name as one specific default style, not "uncategorized".
+const HARDCODED_NAME_STYLES: Record<string, { rules: NameStyleRule[]; defaultLabel: string }> = {
+  ic: {
+    rules: [
+      { label: "Baseline", pattern: /^baseline-/i },
+      { label: "Outline", pattern: /^outline-/i },
+      { label: "Round", pattern: /^round-/i },
+      { label: "Sharp", pattern: /^sharp-/i },
+      { label: "Twotone", pattern: /^twotone-/i },
+    ],
+    defaultLabel: "Baseline",
+  },
+  ph: {
+    rules: [
+      { label: "Thin", pattern: /-thin$/i },
+      { label: "Light", pattern: /-light$/i },
+      { label: "Bold", pattern: /-bold$/i },
+      { label: "Fill", pattern: /-fill$/i },
+      { label: "Duotone", pattern: /-duotone$/i },
+    ],
+    defaultLabel: "Regular",
+  },
+  solar: {
+    rules: [
+      { label: "Bold Duotone", pattern: /-bold-duotone$/i },
+      { label: "Line Duotone", pattern: /-line-duotone$/i },
+      { label: "Bold", pattern: /-bold$/i },
+      { label: "Broken", pattern: /-broken$/i },
+      { label: "Linear", pattern: /-linear$/i },
+      { label: "Outline", pattern: /-outline$/i },
+    ],
+    defaultLabel: "Linear",
+  },
+  heroicons: {
+    rules: [
+      { label: "Micro (16, Solid)", pattern: /-16-solid$/i },
+      { label: "Mini (20, Solid)", pattern: /-20-solid$/i },
+      { label: "Solid", pattern: /-solid$/i },
+    ],
+    defaultLabel: "Outline",
+  },
+  ion: {
+    rules: [
+      { label: "Outline", pattern: /-outline$/i },
+      { label: "Sharp", pattern: /-sharp$/i },
+    ],
+    defaultLabel: "Filled",
+  },
+  ri: {
+    rules: [
+      { label: "Fill", pattern: /-fill$/i },
+      { label: "Line", pattern: /-line$/i },
+    ],
+    defaultLabel: "Line",
+  },
+  fluent: {
+    rules: [
+      { label: "Filled", pattern: /-filled$/i },
+      { label: "Regular", pattern: /-regular$/i },
+    ],
+    defaultLabel: "Regular",
+  },
+  tabler: {
+    rules: [
+      { label: "Filled", pattern: /-filled$/i },
+    ],
+    defaultLabel: "Outline",
+  },
+};
+
 const NAME_STYLE_SUFFIX_RE = new RegExp(`[-_](${STYLE_SUFFIXES.join("|")})$`, "i");
 // Some libraries put the style first instead — classic Material Icons names
 // like "baseline-home" / "outline-home" / "round-home", not "home-outline".
@@ -223,13 +314,28 @@ const NAME_STYLE_MIN_SHARE = 0.05;
  * the already-loaded name index to detect the same pattern at the name
  * level instead, for a "style" filter scoped to one library.
  *
- * Two filters keep this from firing on noise: a suffix must cover a real
- * share of the collection (not a few incidental names), and after that,
- * the surviving suffixes together must still cover a real share of all
- * names and have at least two distinct styles.
+ * For popular libraries, a verified rule set from HARDCODED_NAME_STYLES is
+ * used instead of guessing — hand-checked against real icon-name data, so
+ * it can't misfire the way a generic word match can. Everything else falls
+ * through to the generic heuristic below, gated by two thresholds so it
+ * doesn't fire on noise: a suffix must cover a real share of the
+ * collection (not a few incidental names), and after that, the surviving
+ * suffixes together must still cover a real share of all names and have at
+ * least two distinct styles.
  */
-export function detectNameStyles(names: string[]): NameStyleClusters | null {
+export function detectNameStyles(names: string[], prefix?: string): NameStyleClusters | null {
   if (names.length === 0) return null;
+
+  const hardcoded = prefix ? HARDCODED_NAME_STYLES[prefix] : undefined;
+  if (hardcoded) {
+    const styleByName = new Map<string, string>();
+    for (const name of names) {
+      const rule = hardcoded.rules.find((r) => r.pattern.test(name));
+      styleByName.set(name, rule?.label ?? hardcoded.defaultLabel);
+    }
+    const styles = Array.from(new Set(styleByName.values())).sort((a, b) => a.localeCompare(b));
+    return styles.length >= 2 ? { styleByName, styles } : null;
+  }
 
   const rawMatches = new Map<string, string>();
   const countBySuffix = new Map<string, number>();
