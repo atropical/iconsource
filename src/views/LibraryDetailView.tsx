@@ -112,6 +112,12 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     return { kind: "prefix", key: activePrefix, label: library.styles[0].label, prefix: activePrefix, total: index.names.length };
   }, [tabs, activeTabKey, index, activePrefix, library.styles]);
 
+  // Iconify's own version string for whatever the active prefix is — looked
+  // up from library.styles rather than activeTab since a name-kind tab
+  // (Phosphor "Bold", classic Material Icons "Outline", ...) doesn't carry
+  // its own version, it's a filtered subset of the one underlying prefix.
+  const activeVersion = library.styles.find((s) => s.prefix === activePrefix)?.version;
+
   const selectTab = (key: string) => {
     setActiveTabKey(key);
     const tab = tabs?.find((t) => t.key === key);
@@ -215,6 +221,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                 <Text weight="strong">{library.displayName}</Text>
                 <Text style={{ color: "var(--figma-color-text-secondary)" }}>
                   {library.author.name} · {library.license.url ? <Link href={library.license.url} target="_blank">{library.license.title}</Link> : library.license.title}
+                  {activeVersion && <> · v{activeVersion}</>}
                 </Text>
               </Flex>
 
