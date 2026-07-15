@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Text, Input, Link, Flex, Button, SegmentedControl } from "figma-kit";
+import { Text, Input, Link, Flex, Button, SegmentedControl, Tabs } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { IconGlyph } from "../components/IconGlyph";
 import { detectNameStyles, fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
@@ -10,6 +10,11 @@ interface LibraryDetailViewProps {
   onBack: () => void;
 }
 
+/** One navigable style tab. Either a real sibling Iconify prefix (kind "prefix", e.g. Material Symbols Light) or a name-filtered subset of a single prefix (kind "name", e.g. Phosphor's "Bold" weight, which isn't its own collection — see detectNameStyles). Unified so the UI never has to choose between a toggle group and a select depending on which mechanism applies. */
+type EffectiveTab =
+  | { kind: "prefix"; key: string; label: string; prefix: string; total: number; version?: string }
+  | { kind: "name"; key: string; label: string; total: number };
+
 const LARGE_LIBRARY_THRESHOLD = 300;
 const PAGE_SIZE = 120;
 const ICON_BOX = 48;
@@ -17,14 +22,20 @@ const ICON_SIZE = 26;
 const STICKY_BG = "var(--figma-color-bg)";
 
 export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, onBack }) => {
-  const [styleIndex, setStyleIndex] = useState(0);
+  const isMultiPrefix = library.styles.length > 1;
+  // The single real Iconify prefix everything is fetched from. For a
+  // multi-prefix library this changes when the user switches tabs; for a
+  // name-encoded library (Phosphor, classic Material Icons, ...) it's fixed
+  // — switching tabs there just re-filters the one already-loaded index.
+  const [activePrefix, setActivePrefix] = useState(library.styles[0].prefix);
+  const [activeTabKey, setActiveTabKey] = useState<string>(library.styles[0].prefix);
+
   const [index, setIndex] = useState<PrefixIndex | null>(null);
   const [indexLoading, setIndexLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
-  const [nameStyle, setNameStyle] = useState("All");
   const [sortOrder, setSortOrder] = useState<"az" | "za">("az");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<string | null>(null);
@@ -34,20 +45,18 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   const [progress, setProgress] = useState({ done: 0, total: 0 });
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const style = library.styles[styleIndex];
 
   useEffect(() => {
     setIndexLoading(true);
     setError(null);
     setQuery("");
     setCategory("All");
-    setNameStyle("All");
     setVisibleCount(PAGE_SIZE);
-    getPrefixIndex(style.prefix)
+    getPrefixIndex(activePrefix)
       .then(setIndex)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load icons"))
       .finally(() => setIndexLoading(false));
-  }, [style.prefix]);
+  }, [activePrefix]);
 
   useEffect(() => {
     const handler = ({ data: { pluginMessage } }: { data: { pluginMessage: PluginMessage } }) => {
@@ -67,27 +76,72 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     return () => window.removeEventListener("message", handler);
   }, []);
 
-  // Only relevant for libraries with a single Iconify-level style — see
-  // detectNameStyles for why (real style siblings already show as tabs).
+  // Only relevant for libraries with a single Iconify-level prefix — real
+  // sibling prefixes already give us tabs directly.
   const nameStyles = useMemo(
-    () => (index && library.styles.length === 1 ? detectNameStyles(index.names, style.prefix) : null),
-    [index, library.styles.length, style.prefix]
+    () => (index && !isMultiPrefix ? detectNameStyles(index.names, activePrefix) : null),
+    [index, isMultiPrefix, activePrefix]
   );
+
+  const tabs: EffectiveTab[] | null = useMemo(() => {
+    if (isMultiPrefix) {
+      return library.styles.map((s) => ({ kind: "prefix" as const, key: s.prefix, label: s.label, prefix: s.prefix, total: s.total, version: s.version }));
+    }
+    if (!nameStyles) return null;
+    const counts = new Map<string, number>();
+    for (const label of nameStyles.styleByName.values()) counts.set(label, (counts.get(label) ?? 0) + 1);
+    return nameStyles.styles.map((label) => ({ kind: "name" as const, key: label, label, total: counts.get(label) ?? 0 }));
+  }, [isMultiPrefix, library.styles, nameStyles]);
+
+  // Default to the first tab (never an "all styles combined" view) once tabs
+  // become known — for name-encoded libraries that's only after the index
+  // (and therefore detection) has loaded.
+  useEffect(() => {
+    if (tabs && tabs.length > 0 && !tabs.some((t) => t.key === activeTabKey)) {
+      setActiveTabKey(tabs[0].key);
+    }
+  }, [tabs, activeTabKey]);
+
+  // Libraries with exactly one real style (no sibling prefixes, no detected
+  // name-encoded variants) have no tabs to show, but still need a stand-in
+  // "active style" so import/labels/counts work the same way as everywhere
+  // else — it's just the whole prefix.
+  const activeTab: EffectiveTab | null = useMemo(() => {
+    if (tabs) return tabs.find((t) => t.key === activeTabKey) ?? tabs[0] ?? null;
+    if (!index) return null;
+    return { kind: "prefix", key: activePrefix, label: library.styles[0].label, prefix: activePrefix, total: index.names.length };
+  }, [tabs, activeTabKey, index, activePrefix, library.styles]);
+
+  const selectTab = (key: string) => {
+    setActiveTabKey(key);
+    const tab = tabs?.find((t) => t.key === key);
+    if (tab?.kind === "prefix" && tab.prefix !== activePrefix) {
+      setActivePrefix(tab.prefix);
+    }
+  };
+
+  // The full name list for whichever single style is currently active,
+  // before search/category filtering — this is what "import" uses, so a
+  // search query never narrows what gets imported.
+  const namesInActiveStyle = useMemo(() => {
+    if (!index) return [];
+    if (!isMultiPrefix && nameStyles && activeTab?.kind === "name") {
+      return index.names.filter((n) => nameStyles.styleByName.get(n) === activeTab.label);
+    }
+    return index.names;
+  }, [index, isMultiPrefix, nameStyles, activeTab]);
 
   const filteredNames = useMemo(() => {
     if (!index) return [];
     const q = query.trim().toLowerCase();
-    let names = index.names;
+    let names = namesInActiveStyle;
     if (q) names = names.filter((n) => n.includes(q));
     if (category !== "All") names = names.filter((n) => index.categoryByName.get(n) === category);
-    if (nameStyles && nameStyle !== "All") {
-      names = names.filter((n) => nameStyles.styleByName.get(n) === nameStyle);
-    }
     names = [...names].sort((a, b) => (sortOrder === "az" ? a.localeCompare(b) : b.localeCompare(a)));
     return names;
-  }, [index, query, category, nameStyles, nameStyle, sortOrder]);
+  }, [index, namesInActiveStyle, query, category, sortOrder]);
 
-  useEffect(() => setVisibleCount(PAGE_SIZE), [query, category, nameStyle, sortOrder, style.prefix]);
+  useEffect(() => setVisibleCount(PAGE_SIZE), [query, category, sortOrder, activeTabKey]);
 
   const visibleNames = filteredNames.slice(0, visibleCount);
 
@@ -100,21 +154,24 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   };
 
   const importStyle = async () => {
+    if (!activeTab) return;
+    const total = namesInActiveStyle.length;
+
     const confirmed = window.confirm(
-      style.total > LARGE_LIBRARY_THRESHOLD
-        ? `Import all ${style.total.toLocaleString()} icons from "${library.displayName} — ${style.label}"?\n\nThis creates ${style.total.toLocaleString()} nodes on the canvas and may take a while.`
-        : `Import all ${style.total.toLocaleString()} icons from "${library.displayName} — ${style.label}"?`
+      total > LARGE_LIBRARY_THRESHOLD
+        ? `Import all ${total.toLocaleString()} icons from "${library.displayName} — ${activeTab.label}"?\n\nThis creates ${total.toLocaleString()} nodes on the canvas and may take a while.`
+        : `Import all ${total.toLocaleString()} icons from "${library.displayName} — ${activeTab.label}"?`
     );
     if (!confirmed) return;
 
     setError(null);
     setImporting(true);
     setPhase("fetching");
-    setProgress({ done: 0, total: style.total });
+    setProgress({ done: 0, total });
 
     try {
-      const names = index?.names ?? (await getPrefixIndex(style.prefix)).names;
-      const icons = await fetchIconData(style.prefix, names, (done, total) => setProgress({ done, total }));
+      const version = activeTab.kind === "prefix" ? activeTab.version : undefined;
+      const icons = await fetchIconData(activePrefix, namesInActiveStyle, (done, t) => setProgress({ done, total: t }));
 
       setPhase("inserting");
       parent.postMessage(
@@ -122,7 +179,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
           pluginMessage: {
             type: MessageTypes.IMPORT_ICONS_REQUEST,
             icons,
-            libraryFingerprint: `${style.version ?? "v0"}:${style.total}`,
+            libraryFingerprint: `${version ?? "v0"}:${total}`,
           } as PluginMessage,
         },
         "*"
@@ -161,27 +218,22 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                 </Text>
               </Flex>
 
-              {library.styles.length > 1 && (
-                <SegmentedControl.Root
-                  value={style.prefix}
-                  onValueChange={(value: string) => {
-                    if (!value) return;
-                    const i = library.styles.findIndex((s) => s.prefix === value);
-                    if (i >= 0) setStyleIndex(i);
-                  }}
-                  fullWidth
-                >
-                  {library.styles.map((s) => (
-                    <SegmentedControl.Item key={s.prefix} value={s.prefix}>
-                      <SegmentedControl.Text>{s.label}</SegmentedControl.Text>
-                    </SegmentedControl.Item>
-                  ))}
-                </SegmentedControl.Root>
+              {tabs && tabs.length > 1 && (
+                <Tabs.Root value={activeTabKey} onValueChange={selectTab}>
+                  <Tabs.List>
+                    {tabs.map((t) => (
+                      <Tabs.Trigger key={t.key} value={t.key}>{t.label}</Tabs.Trigger>
+                    ))}
+                  </Tabs.List>
+                </Tabs.Root>
+              )}
+              {!tabs && !isMultiPrefix && indexLoading && (
+                <Text style={{ color: "var(--figma-color-text-secondary)" }}>Checking for styles…</Text>
               )}
 
               <Flex gap="2">
                 <Input
-                  placeholder={`Search within ${style.label}…`}
+                  placeholder={activeTab ? `Search within ${activeTab.label}…` : "Search…"}
                   value={query}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
                   style={{ flex: 1 }}
@@ -204,25 +256,6 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                     ))}
                   </select>
                 )}
-                {nameStyles && (
-                  <select
-                    value={nameStyle}
-                    onChange={(e) => setNameStyle(e.target.value)}
-                    title="This library keeps its variants (outline/filled/round/etc.) as part of the icon name rather than as separate styles, so this filter is detected from the names themselves."
-                    style={{
-                      background: "var(--figma-color-bg-secondary)",
-                      border: "1px solid var(--figma-color-border)",
-                      borderRadius: 6,
-                      color: "var(--figma-color-text)",
-                      padding: "0 0.4rem",
-                    }}
-                  >
-                    <option value="All">All icon styles</option>
-                    {nameStyles.styles.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                )}
                 <SegmentedControl.Root value={sortOrder} onValueChange={(v: string) => v && setSortOrder(v as "az" | "za")}>
                   <SegmentedControl.Item value="az"><SegmentedControl.Text>A→Z</SegmentedControl.Text></SegmentedControl.Item>
                   <SegmentedControl.Item value="za"><SegmentedControl.Text>Z→A</SegmentedControl.Text></SegmentedControl.Item>
@@ -238,7 +271,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {visibleNames.map((name) => {
-                const icon = `${style.prefix}:${name}`;
+                const icon = `${activePrefix}:${name}`;
                 return (
                   <button
                     key={icon}
@@ -268,12 +301,14 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
           </div>
 
           <div style={{ position: "sticky", bottom: 0, background: STICKY_BG, paddingTop: "0.75rem" }}>
-            <Button variant="primary" size="medium" fullWidth onClick={importStyle} disabled={importing}>
+            <Button variant="primary" size="medium" fullWidth onClick={importStyle} disabled={importing || !activeTab}>
               {importing
                 ? phase === "fetching"
                   ? `Fetching icons… ${progress.done}/${progress.total}`
                   : `Inserting icons… ${progress.done}/${progress.total}`
-                : `Import all ${style.total.toLocaleString()} icons (${style.label})`}
+                : activeTab
+                  ? `Import all ${namesInActiveStyle.length.toLocaleString()} icons (${activeTab.label})`
+                  : "Loading…"}
             </Button>
           </div>
         </Flex>
