@@ -103,6 +103,9 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
               color: "var(--figma-color-text)",
               padding: "0 0.4rem",
               height: "100%",
+              maxWidth: 150,
+              flexShrink: 0,
+              textOverflow: "ellipsis",
             }}
           >
             <option value="All">All licenses</option>

@@ -248,6 +248,9 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                       borderRadius: 6,
                       color: "var(--figma-color-text)",
                       padding: "0 0.4rem",
+                      maxWidth: 130,
+                      flexShrink: 0,
+                      textOverflow: "ellipsis",
                     }}
                   >
                     <option value="All">All categories</option>
