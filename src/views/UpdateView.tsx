@@ -106,7 +106,7 @@ export const UpdateView: React.FC = () => {
 
         {!checking && groups.length === 0 && (
           <Text style={{ color: "var(--figma-color-text-secondary)" }}>
-            No Icontopia-imported icons found in this document yet.
+            No Iconsource-imported icons found in this document yet.
           </Text>
         )}
 

@@ -287,7 +287,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
                     key={icon}
                     onClick={() => setSelected(icon)}
                     title={icon}
-                    className="icontopia-icon-cell"
+                    className="iconsource-icon-cell"
                     data-selected={selected === icon}
                     style={{
                       width: ICON_BOX,

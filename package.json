@@ -1,7 +1,7 @@
 {
-  "name": "icontopia",
+  "name": "iconsource",
   "version": "0.1.0",
-  "description": "Icontopia is a Figma plugin for browsing, importing, and version-syncing icons from open source icon libraries.",
+  "description": "Iconsource is a Figma plugin for browsing, importing, and version-syncing icons from open source icon libraries.",
   "main": "dist/code.js",
   "type": "module",
   "scripts": {

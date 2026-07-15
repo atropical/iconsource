@@ -93,7 +93,7 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
             <button
               key={lib.id}
               onClick={() => onSelect(lib)}
-              className="icontopia-card"
+              className="iconsource-card"
               style={{
                 display: "flex",
                 flexDirection: "column",

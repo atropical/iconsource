@@ -73,7 +73,7 @@ export interface IconData {
 }
 
 /**
- * Record of an icon Icontopia has previously inserted into this document,
+ * Record of an icon Iconsource has previously inserted into this document,
  * read back from a tagged node's pluginData. See utils/iconTracking.ts for
  * the pluginData keys this mirrors.
  */

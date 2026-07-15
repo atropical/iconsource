@@ -2,7 +2,7 @@
 
 /**
  * Node tagging + version-safe replace for imported icons. Runs on the plugin
- * main thread (has document access, no DOM). Every icon Icontopia inserts is
+ * main thread (has document access, no DOM). Every icon Iconsource inserts is
  * tagged via pluginData so a later "check for updates" pass can find it,
  * compare it against the live Iconify SVG, and swap geometry in place
  * without deleting/recreating the node — preserving its id, position, size,
@@ -21,7 +21,7 @@ interface IconInput {
   svg: string;
 }
 
-const NS = "icontopia";
+const NS = "iconsource";
 const KEY_ICON = `${NS}:icon`; // "<prefix>:<name>"
 const KEY_HASH = `${NS}:svgHash`;
 const KEY_FINGERPRINT = `${NS}:libraryFingerprint`;
@@ -119,7 +119,7 @@ export async function insertIconsBatch(
   return frame;
 }
 
-/** Recursively find every node on every page tagged as an Icontopia-imported icon. */
+/** Recursively find every node on every page tagged as an Iconsource-imported icon. */
 export function findTrackedNodes(): SceneNode[] {
   const found: SceneNode[] = [];
 
@@ -174,7 +174,7 @@ export interface UpdateResult {
 
 /**
  * Replace an already-imported icon's geometry with a newer SVG, truly in
- * place: the outer node Icontopia inserted keeps its id (so selection,
+ * place: the outer node Iconsource inserted keeps its id (so selection,
  * prototype links, dev-mode comments, etc. pinned to it survive), only its
  * inner vector paths are swapped. User-applied colours are captured before
  * the swap and reapplied by traversal order afterwards.
@@ -188,7 +188,7 @@ export function updateIconNode(existing: SceneNode, newSvg: string, icon: string
   }
 
   if (!("children" in existing)) {
-    throw new Error("Tracked icon node has no children to replace — was it modified outside Icontopia?");
+    throw new Error("Tracked icon node has no children to replace — was it modified outside Iconsource?");
   }
 
   const fills = captureFills(existing);

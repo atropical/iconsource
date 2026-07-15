@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import "figma-kit/styles.css";
-import "./styles/icontopia.css";
+import "./styles/iconsource.css";
 import { PluginCommands, MessageTypes, PluginMessage, IconLibrary } from "./types.d";
 import { LibrariesView } from "./views/LibrariesView";
 import { LibraryDetailView } from "./views/LibraryDetailView";
