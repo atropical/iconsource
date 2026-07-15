@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Text, Input, Link, Flex, SegmentedControl } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { IconGlyph } from "../components/IconGlyph";
-import { getAllCollections, getPrefixIndex, groupLibraries, mapLimit } from "../utils/iconify";
+import { getAllCollections, groupLibraries } from "../utils/iconify";
 import { IconLibrary } from "../types.d";
 
 interface LibrariesViewProps {
@@ -10,12 +10,6 @@ interface LibrariesViewProps {
 }
 
 type SortMode = "popular" | "az" | "most-icons";
-
-// Iconify's /collections endpoint only ever returns ~6 sample icons per
-// library. To show a fuller preview, each card's default style is
-// background-enriched (after the initial paint) with more names pulled from
-// its full icon index, capped here.
-const SAMPLE_TARGET = 12;
 
 export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
   const [libraries, setLibraries] = useState<IconLibrary[]>([]);
@@ -26,34 +20,10 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
     getAllCollections()
-      .then(async (raw) => {
-        const grouped = groupLibraries(raw); // already ranked popular-first
-        if (cancelled) return;
-        setLibraries(grouped);
-        setLoading(false);
-
-        await mapLimit(grouped, 8, async (lib) => {
-          if (cancelled || lib.sampleIcons.length >= SAMPLE_TARGET) return;
-          try {
-            const prefix = lib.styles[0].prefix;
-            const { names } = await getPrefixIndex(prefix);
-            if (cancelled || names.length === 0) return;
-            const sampleIcons = names.slice(0, SAMPLE_TARGET).map((name) => `${prefix}:${name}`);
-            setLibraries((prev) => prev.map((l) => (l.id === lib.id ? { ...l, sampleIcons } : l)));
-          } catch {
-            // Best-effort enrichment — the original ~6 samples stay if this fails.
-          }
-        });
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load icon libraries");
-        setLoading(false);
-      });
-
-    return () => { cancelled = true; };
+      .then((raw) => setLibraries(groupLibraries(raw))) // already ranked popular-first
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load icon libraries"))
+      .finally(() => setLoading(false));
   }, []);
 
   const licenses = useMemo(
