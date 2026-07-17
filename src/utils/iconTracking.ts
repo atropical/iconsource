@@ -1,5 +1,7 @@
 /// <reference types="@figma/plugin-typings" />
 
+import { isStaleRun } from "./cancellation";
+
 /**
  * Node tagging + version-safe replace for imported icons. Runs on the plugin
  * main thread (has document access, no DOM). Every icon Iconsource inserts is
@@ -66,24 +68,32 @@ const ICON_TARGET_SIZE = 24;
 
 /**
  * Insert a batch of icons (a search-result subset, or an entire library
- * style) as a grid inside one frame, tagging each icon individually.
+ * style) as a grid inside one section, tagging each icon individually.
+ * Sections (rather than a frame) keep the imported icons visually grouped
+ * on the canvas without auto-layout/clipping side effects, and read better
+ * for a whole-library drop than a frame does.
  * Runs in chunks with a `setTimeout(0)` yield between them so the Figma UI
  * thread stays responsive on large libraries, and reports progress via
- * `onProgress` so the caller can show it.
+ * `onProgress` so the caller can show it. `runToken` is checked at each
+ * yield so a stale invocation (superseded by a new run, or the plugin
+ * closing mid-import) stops inserting further nodes instead of quietly
+ * continuing in the background — see utils/cancellation.
  */
 export async function insertIconsBatch(
   icons: IconInput[],
   libraryFingerprint: string,
   frameName: string,
+  runToken: number,
   onProgress?: (done: number, total: number) => void
-): Promise<FrameNode> {
-  const frame = figma.createFrame();
+): Promise<SectionNode> {
+  const frame = figma.createSection();
   frame.name = frameName;
   frame.fills = [];
+  frame.setRelaunchData({ "check-updates": "Check this library for icon updates" });
 
   const columns = Math.min(GRID_COLUMNS, Math.max(1, icons.length));
   const rows = Math.max(1, Math.ceil(icons.length / columns));
-  frame.resize(columns * GRID_CELL, rows * GRID_CELL);
+  frame.resizeWithoutConstraints(columns * GRID_CELL, rows * GRID_CELL);
 
   const viewport = figma.viewport.center;
   frame.x = viewport.x - frame.width / 2;
@@ -105,10 +115,12 @@ export async function insertIconsBatch(
 
     frame.appendChild(node);
     tagIconNode(node, data.icon, hashString(data.svg), libraryFingerprint);
+    node.setRelaunchData({ "check-updates": "Check this icon for updates" });
 
     if (i % 25 === 24) {
       onProgress?.(i + 1, icons.length);
       await new Promise((r) => setTimeout(r, 0));
+      if (isStaleRun(runToken)) return frame;
     }
   }
 
@@ -119,8 +131,22 @@ export async function insertIconsBatch(
   return frame;
 }
 
-/** Recursively find every node on every page tagged as an Iconsource-imported icon. */
-export function findTrackedNodes(): SceneNode[] {
+/**
+ * Recursively find every node on every page tagged as an Iconsource-imported
+ * icon. The manifest uses "dynamic-page" documentAccess, so every page but
+ * the current one is unloaded until asked for — touching `.children` on one
+ * before that throws rather than hangs, which without this would silently
+ * kill the scan on any multi-page file and leave the caller waiting forever
+ * for a response that never comes.
+ *
+ * `runToken`, if given, is checked right after the (potentially slow)
+ * `loadAllPagesAsync` so a scan superseded by a new run or a plugin close
+ * doesn't bother walking the whole document afterwards.
+ */
+export async function findTrackedNodes(runToken?: number): Promise<SceneNode[]> {
+  await figma.loadAllPagesAsync();
+  if (runToken !== undefined && isStaleRun(runToken)) return [];
+
   const found: SceneNode[] = [];
 
   const walk = (node: BaseNode) => {
@@ -218,11 +244,13 @@ export function updateIconNode(existing: SceneNode, newSvg: string, icon: string
 /**
  * Update every tracked node from one library style in place. `freshByName`
  * maps bare icon name -> freshly fetched IconData for that prefix.
+ * `runToken` is checked at each yield — see insertIconsBatch above for why.
  */
 export async function updateLibraryNodes(
   nodes: SceneNode[],
   freshByName: Map<string, IconInput>,
   libraryFingerprint: string,
+  runToken: number,
   onProgress?: (done: number, total: number) => void
 ): Promise<{ updated: number }> {
   let updated = 0;
@@ -239,6 +267,7 @@ export async function updateLibraryNodes(
     if (i % 25 === 24) {
       onProgress?.(i + 1, nodes.length);
       await new Promise((r) => setTimeout(r, 0));
+      if (isStaleRun(runToken)) return { updated };
     }
   }
 

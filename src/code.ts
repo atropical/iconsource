@@ -2,15 +2,28 @@
 
 import { MessageTypes, PluginCommands, PluginMessage, TrackedIconNode } from "./types.d";
 import { findTrackedNodes, insertIconsBatch, readIconTag, updateLibraryNodes } from "./utils/iconTracking";
+import { bumpRunToken, currentRunToken, isStaleRun } from "./utils/cancellation";
 
 figma.showUI(__html__, { width: 760, height: 720, themeColors: true });
 
 figma.on("run", ({ command }) => {
+  // A relaunch button or menu command re-triggers "run" without tearing
+  // down this context, so a previous invocation's still-running import/scan
+  // loop needs a way to notice it's been superseded — see utils/cancellation.
+  bumpRunToken();
   figma.ui.postMessage({
     type: MessageTypes.BASIC_INFO,
     command: command as PluginCommands,
     editorType: figma.editorType || "figma",
   } as PluginMessage);
+});
+
+// Fires right before the plugin is torn down (user closed it, or Figma is
+// unloading it). Bumping the token here means any in-flight loop's next
+// staleness check stops it from doing further pointless document edits or
+// posting to a UI that's already gone.
+figma.on("close", () => {
+  bumpRunToken();
 });
 
 async function handleImportIcons(msg: PluginMessage) {
@@ -19,17 +32,22 @@ async function handleImportIcons(msg: PluginMessage) {
     return;
   }
 
+  const token = currentRunToken();
+
   try {
     const frameName = msg.icons.length === 1 ? msg.icons[0].icon : `${msg.icons[0].prefix} (${msg.icons.length} icons)`;
 
-    await insertIconsBatch(msg.icons, msg.libraryFingerprint, frameName, (done, total) => {
+    await insertIconsBatch(msg.icons, msg.libraryFingerprint, frameName, token, (done, total) => {
+      if (isStaleRun(token)) return;
       figma.ui.postMessage({ type: MessageTypes.IMPORT_PROGRESS, imported: done, total } as PluginMessage);
     });
 
+    if (isStaleRun(token)) return;
     figma.ui.postMessage({ type: MessageTypes.IMPORT_RESULT, imported: msg.icons.length, total: msg.icons.length } as PluginMessage);
     figma.notify(`✅ Imported ${msg.icons.length} icon${msg.icons.length === 1 ? "" : "s"}`);
   } catch (error) {
     console.error(error);
+    if (isStaleRun(token)) return;
     figma.ui.postMessage({
       type: MessageTypes.IMPORT_ERROR,
       error: error instanceof Error ? error.message : "Unknown error occurred",
@@ -37,25 +55,38 @@ async function handleImportIcons(msg: PluginMessage) {
   }
 }
 
-function handleScanTracked() {
-  const nodes = findTrackedNodes();
-  const tracked: TrackedIconNode[] = nodes
-    .map((node) => {
-      const tag = readIconTag(node);
-      if (!tag) return null;
-      return {
-        nodeId: node.id,
-        name: node.name,
-        icon: tag.icon,
-        prefix: tag.prefix,
-        iconName: tag.name,
-        svgHash: tag.svgHash,
-        libraryFingerprint: tag.libraryFingerprint,
-      } as TrackedIconNode;
-    })
-    .filter((t): t is TrackedIconNode => t !== null);
+async function handleScanTracked() {
+  const token = currentRunToken();
 
-  figma.ui.postMessage({ type: MessageTypes.SCAN_TRACKED_RESULT, tracked } as PluginMessage);
+  try {
+    const nodes = await findTrackedNodes(token);
+    if (isStaleRun(token)) return;
+
+    const tracked: TrackedIconNode[] = nodes
+      .map((node) => {
+        const tag = readIconTag(node);
+        if (!tag) return null;
+        return {
+          nodeId: node.id,
+          name: node.name,
+          icon: tag.icon,
+          prefix: tag.prefix,
+          iconName: tag.name,
+          svgHash: tag.svgHash,
+          libraryFingerprint: tag.libraryFingerprint,
+        } as TrackedIconNode;
+      })
+      .filter((t): t is TrackedIconNode => t !== null);
+
+    figma.ui.postMessage({ type: MessageTypes.SCAN_TRACKED_RESULT, tracked } as PluginMessage);
+  } catch (error) {
+    console.error(error);
+    if (isStaleRun(token)) return;
+    figma.ui.postMessage({
+      type: MessageTypes.SCAN_TRACKED_ERROR,
+      error: error instanceof Error ? error.message : "Unknown error occurred",
+    } as PluginMessage);
+  }
 }
 
 async function handleUpdateLibrary(msg: PluginMessage) {
@@ -64,18 +95,25 @@ async function handleUpdateLibrary(msg: PluginMessage) {
     return;
   }
 
+  const token = currentRunToken();
+
   try {
-    const nodes = findTrackedNodes().filter((node) => readIconTag(node)?.prefix === msg.prefix);
+    const nodes = (await findTrackedNodes(token)).filter((node) => readIconTag(node)?.prefix === msg.prefix);
+    if (isStaleRun(token)) return;
+
     const freshByName = new Map(msg.icons.map((icon) => [icon.name, icon]));
 
-    const { updated } = await updateLibraryNodes(nodes, freshByName, msg.libraryFingerprint, (done, total) => {
+    const { updated } = await updateLibraryNodes(nodes, freshByName, msg.libraryFingerprint, token, (done, total) => {
+      if (isStaleRun(token)) return;
       figma.ui.postMessage({ type: MessageTypes.UPDATE_PROGRESS, imported: done, total } as PluginMessage);
     });
 
+    if (isStaleRun(token)) return;
     figma.ui.postMessage({ type: MessageTypes.UPDATE_RESULT, prefix: msg.prefix, updated } as PluginMessage);
     figma.notify(updated > 0 ? `✅ Updated ${updated} icon${updated === 1 ? "" : "s"} in ${msg.prefix}` : `${msg.prefix} is already up to date`);
   } catch (error) {
     console.error(error);
+    if (isStaleRun(token)) return;
     figma.ui.postMessage({
       type: MessageTypes.UPDATE_ERROR,
       error: error instanceof Error ? error.message : "Unknown error occurred",
@@ -105,7 +143,7 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       break;
 
     case MessageTypes.SCAN_TRACKED_REQUEST:
-      handleScanTracked();
+      await handleScanTracked();
       break;
 
     case MessageTypes.UPDATE_LIBRARY_REQUEST:

@@ -14,10 +14,10 @@ interface RawCollectionInfo {
 let allCollectionsCache: Record<string, RawCollectionInfo> | null = null;
 
 /** Fetch metadata for every Iconify collection in one call. Cached for the session — this is the data the library browser and update fingerprints are built from. */
-export async function getAllCollections(): Promise<Record<string, RawCollectionInfo>> {
+export async function getAllCollections(signal?: AbortSignal): Promise<Record<string, RawCollectionInfo>> {
   if (allCollectionsCache) return allCollectionsCache;
 
-  const res = await fetch(`${API_BASE}/collections`);
+  const res = await fetch(`${API_BASE}/collections`, { signal });
   if (!res.ok) throw new Error(`Failed to load icon libraries (${res.status})`);
 
   allCollectionsCache = await res.json() as Record<string, RawCollectionInfo>;
@@ -129,9 +129,16 @@ export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibr
   }
 
   return Array.from(groups.entries()).map(([base, entries]) => {
+    // Pick the sibling to source samples/metadata from *before* sorting for
+    // display below (that sort is alphabetical by style label, which for a
+    // family like Font Awesome 6 would put "Brands" first — and a logo-only
+    // style's `samples` names aren't valid icons in a sibling like
+    // "-solid"/"-regular" either way, so avoid it when a normal-icon style
+    // exists to source from instead).
+    const sampleEntry = entries.find((e) => e.style !== "Brands") ?? entries[0];
     const baseInfo: RawCollectionInfo = raw[base] ?? {
-      ...entries[0].info,
-      name: PREFIX_OVERRIDES[entries[0].prefix]?.baseName ?? entries[0].info.name,
+      ...sampleEntry.info,
+      name: PREFIX_OVERRIDES[sampleEntry.prefix]?.baseName ?? sampleEntry.info.name,
     };
     const styles: LibraryStyle[] = entries
       .sort((a, b) => (a.style === "Default" ? -1 : b.style === "Default" ? 1 : a.style.localeCompare(b.style)))
@@ -141,7 +148,7 @@ export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibr
     // Samples must be namespaced under a prefix that's actually fetchable —
     // "base" itself may be a synthesized virtual id (see PREFIX_OVERRIDES)
     // that doesn't exist as a real collection.
-    const samplePrefix = raw[base] ? base : entries[0].prefix;
+    const samplePrefix = raw[base] ? base : sampleEntry.prefix;
     const sampleIcons = (baseInfo.samples ?? []).slice(0, 16).map((name) => `${samplePrefix}:${name}`);
 
     return {
@@ -168,8 +175,8 @@ export interface PrefixIndex {
  * per style so search, category filtering, sorting, and pagination can all
  * happen client-side instead of round-tripping to Iconify per keystroke.
  */
-export async function getPrefixIndex(prefix: string): Promise<PrefixIndex> {
-  const res = await fetch(`${API_BASE}/collection?prefix=${encodeURIComponent(prefix)}`);
+export async function getPrefixIndex(prefix: string, signal?: AbortSignal): Promise<PrefixIndex> {
+  const res = await fetch(`${API_BASE}/collection?prefix=${encodeURIComponent(prefix)}`, { signal });
   if (!res.ok) throw new Error(`Failed to list icons for "${prefix}" (${res.status})`);
 
   const data = await res.json() as {
@@ -403,7 +410,8 @@ export async function fetchIconData(
   names: string[],
   onProgress?: (fetched: number, total: number) => void,
   chunkSize = 50,
-  concurrency = 6
+  concurrency = 6,
+  signal?: AbortSignal
 ): Promise<IconData[]> {
   const chunks: string[][] = [];
   for (let i = 0; i < names.length; i += chunkSize) chunks.push(names.slice(i, i + chunkSize));
@@ -412,7 +420,7 @@ export async function fetchIconData(
   const out: IconData[] = [];
 
   await mapLimit(chunks, concurrency, async (chunk) => {
-    const res = await fetch(`${API_BASE}/${encodeURIComponent(prefix)}.json?icons=${chunk.map(encodeURIComponent).join(",")}`);
+    const res = await fetch(`${API_BASE}/${encodeURIComponent(prefix)}.json?icons=${chunk.map(encodeURIComponent).join(",")}`, { signal });
     if (!res.ok) throw new Error(`Failed to fetch icons for "${prefix}" (${res.status})`);
 
     const data = await res.json() as IconifyBulkResponse;

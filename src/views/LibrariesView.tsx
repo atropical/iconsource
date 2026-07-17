@@ -20,10 +20,17 @@ export const LibrariesView: React.FC<LibrariesViewProps> = ({ onSelect }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getAllCollections()
+    const controller = new AbortController();
+    getAllCollections(controller.signal)
       .then((raw) => setLibraries(groupLibraries(raw))) // already ranked popular-first
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load icon libraries"))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Failed to load icon libraries");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, []);
 
   const licenses = useMemo(

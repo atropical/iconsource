@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Text, Link, Flex, Button } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { fetchIconData, fingerprintFor, getAllCollections } from "../utils/iconify";
@@ -11,6 +11,22 @@ export const UpdateView: React.FC = () => {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
 
+  // Every fetch this view kicks off (collection metadata, per-icon SVG data)
+  // registers its controller here so it can be aborted in one shot if the
+  // user navigates away or the plugin closes mid-request.
+  const controllersRef = useRef(new Set<AbortController>());
+  const trackedFetch = () => {
+    const controller = new AbortController();
+    controllersRef.current.add(controller);
+    return controller;
+  };
+
+  useEffect(() => {
+    return () => {
+      for (const controller of controllersRef.current) controller.abort();
+    };
+  }, []);
+
   useEffect(() => {
     parent.postMessage({ pluginMessage: { type: MessageTypes.SCAN_TRACKED_REQUEST } as PluginMessage }, "*");
 
@@ -20,10 +36,14 @@ export const UpdateView: React.FC = () => {
         try {
           setGroups(await buildGroups(pluginMessage.tracked));
         } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") return;
           setError(e instanceof Error ? e.message : "Failed to check for updates");
         } finally {
           setChecking(false);
         }
+      } else if (pluginMessage.type === MessageTypes.SCAN_TRACKED_ERROR) {
+        setChecking(false);
+        setError(pluginMessage.error ?? "Failed to check for updates");
       } else if (pluginMessage.type === MessageTypes.UPDATE_PROGRESS) {
         setProgress({ done: pluginMessage.imported ?? 0, total: pluginMessage.total ?? 0 });
       } else if (pluginMessage.type === MessageTypes.UPDATE_RESULT) {
@@ -47,7 +67,8 @@ export const UpdateView: React.FC = () => {
       byPrefix.set(item.prefix, list);
     }
 
-    const collections = await getAllCollections();
+    const controller = trackedFetch();
+    const collections = await getAllCollections(controller.signal);
 
     return Array.from(byPrefix.entries()).map(([prefix, icons]) => {
       const info = collections[prefix];
@@ -71,8 +92,10 @@ export const UpdateView: React.FC = () => {
     setProgress({ done: 0, total: group.icons.length });
 
     try {
+      const controller = trackedFetch();
       const names = group.icons.map((i) => i.iconName);
-      const icons = await fetchIconData(group.prefix, names, (done, total) => setProgress({ done, total }));
+      const icons = await fetchIconData(group.prefix, names, (done, total) => setProgress({ done, total }), 50, 6, controller.signal);
+      if (controller.signal.aborted) return;
 
       parent.postMessage(
         {
@@ -86,6 +109,7 @@ export const UpdateView: React.FC = () => {
         "*"
       );
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setUpdatingPrefix(null);
       setError(e instanceof Error ? e.message : "Update failed");
     }

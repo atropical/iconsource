@@ -45,17 +45,29 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   const [progress, setProgress] = useState({ done: 0, total: 0 });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const importAbortRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight icon-data fetch if the user navigates away
+  // (back to the library list, or the plugin closes) mid-import.
+  useEffect(() => () => importAbortRef.current?.abort(), []);
 
   useEffect(() => {
+    const controller = new AbortController();
     setIndexLoading(true);
     setError(null);
     setQuery("");
     setCategory("All");
     setVisibleCount(PAGE_SIZE);
-    getPrefixIndex(activePrefix)
+    getPrefixIndex(activePrefix, controller.signal)
       .then(setIndex)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load icons"))
-      .finally(() => setIndexLoading(false));
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Failed to load icons");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIndexLoading(false);
+      });
+    return () => controller.abort();
   }, [activePrefix]);
 
   useEffect(() => {
@@ -137,6 +149,13 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     return index.names;
   }, [index, isMultiPrefix, nameStyles, activeTab]);
 
+  // The whole prefix's icon count, as Iconify's /collections reports it —
+  // not namesInActiveStyle.length, which for a name-kind tab is only the
+  // filtered subset. This is what fingerprintFor(info) also derives from,
+  // so the two must be sourced the same way for the import fingerprint to
+  // ever match a later "check for updates" comparison.
+  const prefixTotal = library.styles.find((s) => s.prefix === activePrefix)?.total ?? namesInActiveStyle.length;
+
   const filteredNames = useMemo(() => {
     if (!index) return [];
     const q = query.trim().toLowerCase();
@@ -175,9 +194,12 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
     setPhase("fetching");
     setProgress({ done: 0, total });
 
+    const controller = new AbortController();
+    importAbortRef.current = controller;
+
     try {
-      const version = activeTab.kind === "prefix" ? activeTab.version : undefined;
-      const icons = await fetchIconData(activePrefix, namesInActiveStyle, (done, t) => setProgress({ done, total: t }));
+      const icons = await fetchIconData(activePrefix, namesInActiveStyle, (done, t) => setProgress({ done, total: t }), 50, 6, controller.signal);
+      if (controller.signal.aborted) return;
 
       setPhase("inserting");
       parent.postMessage(
@@ -185,12 +207,20 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
           pluginMessage: {
             type: MessageTypes.IMPORT_ICONS_REQUEST,
             icons,
-            libraryFingerprint: `${version ?? "v0"}:${total}`,
+            // Must match what fingerprintFor(info) computes from Iconify's
+            // live /collections data — the *whole prefix's* version+total,
+            // not this style subset's — otherwise "Check for Updates"
+            // compares against a number it can never equal (e.g. a
+            // name-encoded style tab like Phosphor "Bold" only has ~1,500
+            // of the prefix's ~9,000 icons) and reports an update
+            // available immediately after a fresh import.
+            libraryFingerprint: `${activeVersion ?? "v0"}:${prefixTotal}`,
           } as PluginMessage,
         },
         "*"
       );
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setImporting(false);
       setPhase(null);
       setError(e instanceof Error ? e.message : "Import failed");
