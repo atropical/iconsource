@@ -1,6 +1,6 @@
 export default {
   "name": "Iconsource",
-  "id": "1660068674953897925",
+  "id": "1660086718844081106",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "src/index.html",
