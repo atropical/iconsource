@@ -90,7 +90,7 @@ function tagIconNode(node: SceneNode, icon: string, svgHash: string, libraryFing
 }
 
 const GRID_COLUMNS = 16;
-const GRID_CELL = 40;
+const GRID_CELL = 56;
 const ICON_TARGET_SIZE = 24;
 
 /**
@@ -115,7 +115,8 @@ export async function insertIconsBatch(
 ): Promise<SectionNode> {
   const frame = figma.createSection();
   frame.name = frameName;
-  frame.fills = [];
+  frame.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+  frame.strokes = [];
   frame.setRelaunchData({ "check-updates": "Check this library for icon updates" });
 
   const columns = Math.min(GRID_COLUMNS, Math.max(1, icons.length));
