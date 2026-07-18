@@ -1,6 +1,6 @@
 /// <reference types="@figma/plugin-typings" />
 
-import { MessageTypes, PluginCommands, PluginMessage, TrackedIconNode } from "./types.d";
+import { IconsourcePrefs, MessageTypes, PluginCommands, PluginMessage, TrackedIconNode } from "./types.d";
 import { findTrackedNodes, insertIconsBatch, readIconTag, updateLibraryNodes } from "./utils/iconTracking";
 import { bumpRunToken, currentRunToken, isStaleRun } from "./utils/cancellation";
 
@@ -129,6 +129,19 @@ function handleSelectNode(msg: PluginMessage) {
   figma.viewport.scrollAndZoomIntoView([node]);
 }
 
+const PREFS_KEY = "iconsource:prefs";
+
+async function handleGetPrefs() {
+  const prefs: IconsourcePrefs = (await figma.clientStorage.getAsync(PREFS_KEY)) ?? {};
+  figma.ui.postMessage({ type: MessageTypes.PREFS_GET_RESULT, prefs } as PluginMessage);
+}
+
+async function handleSetPrefs(msg: PluginMessage) {
+  if (!msg.prefs) return;
+  const existing: IconsourcePrefs = (await figma.clientStorage.getAsync(PREFS_KEY)) ?? {};
+  await figma.clientStorage.setAsync(PREFS_KEY, { ...existing, ...msg.prefs });
+}
+
 figma.ui.onmessage = async (msg: PluginMessage) => {
   switch (msg.type) {
     case MessageTypes.GET_BASIC_INFO:
@@ -152,6 +165,14 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
     case MessageTypes.SELECT_NODE_REQUEST:
       handleSelectNode(msg);
+      break;
+
+    case MessageTypes.PREFS_GET_REQUEST:
+      await handleGetPrefs();
+      break;
+
+    case MessageTypes.PREFS_SET_REQUEST:
+      await handleSetPrefs(msg);
       break;
 
     default:

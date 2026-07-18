@@ -33,6 +33,11 @@ export enum MessageTypes {
 
   // Selection sync (for jumping to a tracked node on the canvas)
   SELECT_NODE_REQUEST = "SELECT.NODE.REQUEST",
+
+  // Persisted user preferences (figma.clientStorage, keyed per Figma user)
+  PREFS_GET_REQUEST = "PREFS.GET.REQUEST",
+  PREFS_GET_RESULT = "PREFS.GET.RESULT",
+  PREFS_SET_REQUEST = "PREFS.SET.REQUEST",
 }
 
 /** License metadata for an icon collection, as surfaced by Iconify. */
@@ -99,6 +104,14 @@ export interface TrackedLibraryGroup {
   updateAvailable?: boolean;
 }
 
+/** Sort/filter choices the user has made, persisted across sessions via figma.clientStorage. */
+export interface IconsourcePrefs {
+  /** LibrariesView's "Popular / A→Z / Most icons" control. */
+  librarySortOrder?: "popular" | "az" | "most-icons";
+  /** LibraryDetailView's "A→Z / Z→A" icon-name sort control. */
+  iconSortOrder?: "az" | "za";
+}
+
 export interface PluginMessage {
   type: MessageTypes;
   command?: PluginCommands;
@@ -118,4 +131,8 @@ export interface PluginMessage {
 
   // Selection sync
   nodeId?: string;
+
+  // Prefs: PREFS_GET_RESULT carries the full saved object; PREFS_SET_REQUEST
+  // carries only the keys being changed and is merged into what's stored.
+  prefs?: Partial<IconsourcePrefs>;
 }
