@@ -1,6 +1,6 @@
 {
   "name": "iconsource",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Iconsource is a Figma plugin for browsing, importing, and version-syncing icons from open source icon libraries.",
   "main": "dist/code.js",
   "type": "module",
