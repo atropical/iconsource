@@ -23,10 +23,28 @@ interface IconInput {
   svg: string;
 }
 
-const NS = "iconsource";
-const KEY_ICON = `${NS}:icon`; // "<prefix>:<name>"
-const KEY_HASH = `${NS}:svgHash`;
-const KEY_FINGERPRINT = `${NS}:libraryFingerprint`;
+/**
+ * Tags live in *shared* plugin data, not private plugin data. Private
+ * plugin data is namespaced by the manifest's plugin id, so any change to
+ * that id (a re-registered plugin, a dev build vs the published one) makes
+ * every previously written tag unreadable and silently unlinks every icon
+ * already imported into a document. Shared plugin data is keyed by the
+ * namespace below instead, so tags survive an id change.
+ *
+ * LEGACY_* are the old private keys; they're still read (and lazily copied
+ * across on first sight) so documents tagged by pre-shared-data builds
+ * running under the *current* plugin id keep working. Documents tagged
+ * under an older plugin id can't be read here at all — see
+ * scripts/build-rescue.mjs for the one-shot recovery build.
+ */
+export const NS = "iconsource";
+export const KEY_ICON = "icon"; // "<prefix>:<name>"
+export const KEY_HASH = "svgHash";
+export const KEY_FINGERPRINT = "libraryFingerprint";
+
+export const LEGACY_KEY_ICON = `${NS}:icon`;
+export const LEGACY_KEY_HASH = `${NS}:svgHash`;
+export const LEGACY_KEY_FINGERPRINT = `${NS}:libraryFingerprint`;
 
 /** Cheap, deterministic string hash (djb2) — good enough for change detection, not a security primitive. */
 export function hashString(input: string): string {
@@ -46,20 +64,29 @@ export interface IconTag {
 }
 
 export function readIconTag(node: SceneNode): IconTag | null {
-  const icon = node.getPluginData(KEY_ICON);
-  const svgHash = node.getPluginData(KEY_HASH);
-  if (!icon || !svgHash) return null;
+  let icon = node.getSharedPluginData(NS, KEY_ICON);
+  let svgHash = node.getSharedPluginData(NS, KEY_HASH);
+  let libraryFingerprint = node.getSharedPluginData(NS, KEY_FINGERPRINT);
+
+  if (!icon || !svgHash) {
+    // Pre-shared-data tag written under the current plugin id: read it, then
+    // promote it so this node is id-proof from here on.
+    icon = node.getPluginData(LEGACY_KEY_ICON);
+    svgHash = node.getPluginData(LEGACY_KEY_HASH);
+    libraryFingerprint = node.getPluginData(LEGACY_KEY_FINGERPRINT);
+    if (!icon || !svgHash) return null;
+    tagIconNode(node, icon, svgHash, libraryFingerprint);
+  }
 
   const [prefix, ...rest] = icon.split(":");
-  const libraryFingerprint = node.getPluginData(KEY_FINGERPRINT);
 
   return { icon, prefix, name: rest.join(":"), svgHash, libraryFingerprint };
 }
 
 function tagIconNode(node: SceneNode, icon: string, svgHash: string, libraryFingerprint: string): void {
-  node.setPluginData(KEY_ICON, icon);
-  node.setPluginData(KEY_HASH, svgHash);
-  node.setPluginData(KEY_FINGERPRINT, libraryFingerprint);
+  node.setSharedPluginData(NS, KEY_ICON, icon);
+  node.setSharedPluginData(NS, KEY_HASH, svgHash);
+  node.setSharedPluginData(NS, KEY_FINGERPRINT, libraryFingerprint);
 }
 
 const GRID_COLUMNS = 16;
@@ -150,8 +177,14 @@ export async function findTrackedNodes(runToken?: number): Promise<SceneNode[]> 
   const found: SceneNode[] = [];
 
   const walk = (node: BaseNode) => {
-    if ("getPluginData" in node && readIconTag(node as SceneNode)) {
-      found.push(node as SceneNode);
+    if ("getSharedPluginData" in node && readIconTag(node as SceneNode)) {
+      const icon = node as SceneNode;
+      found.push(icon);
+      // Relaunch data is plugin-id scoped like private plugin data, so icons
+      // tagged under an older id lost their relaunch button too. Re-set it
+      // whenever we see a tracked node — cheap, idempotent, and restores the
+      // button under whatever id is running now.
+      icon.setRelaunchData({ "check-updates": "Check this icon for updates" });
       return; // don't descend into an icon's own internals looking for nested tags
     }
     if ("children" in node) {
