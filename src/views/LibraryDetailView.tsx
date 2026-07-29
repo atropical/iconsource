@@ -3,6 +3,7 @@ import { Text, Input, Link, Flex, Button, SegmentedControl, Tabs } from "figma-k
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { IconGlyph } from "../components/IconGlyph";
 import { detectNameStyles, fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
+import { usePrefs } from "../hooks/usePrefs";
 import { IconLibrary, MessageTypes, PluginMessage } from "../types.d";
 
 interface LibraryDetailViewProps {
@@ -34,9 +35,10 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   const [indexLoading, setIndexLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { prefs, loaded: prefsLoaded, setPref } = usePrefs();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
-  const [sortOrder, setSortOrder] = useState<"az" | "za">("az");
+  const [sortOrder, setSortOrderState] = useState<"az" | "za">("az");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -50,6 +52,17 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   // Abort any in-flight icon-data fetch if the user navigates away
   // (back to the library list, or the plugin closes) mid-import.
   useEffect(() => () => importAbortRef.current?.abort(), []);
+
+  // Adopt the saved sort order once prefs load — a beat after mount, so
+  // this can't just be the useState initializer above.
+  useEffect(() => {
+    if (prefsLoaded && prefs.iconSortOrder) setSortOrderState(prefs.iconSortOrder);
+  }, [prefsLoaded, prefs.iconSortOrder]);
+
+  const setSortOrder = (order: "az" | "za") => {
+    setSortOrderState(order);
+    setPref("iconSortOrder", order);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
