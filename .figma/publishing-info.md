@@ -18,7 +18,7 @@ DESCRIPTION:
 
 
 ### How version tracking works
-Every imported icon is tagged via Figma's node `pluginData` with the icon's source id, a hash of the inserted SVG, and (when available) the source collection's version string. "Check for Updates" re-fetches the live SVG for each tagged icon and compares hashes — if it differs, the update swaps only the icon's inner vector paths, never deletes and recreates the node, and best-effort reapplies any solid fills you'd customised, matched by path order.
+Every imported icon is tagged via Figma's node shared plugin data with the icon's source id, a hash of the inserted SVG, and (when available) the source collection's version string. "Check for Updates" re-fetches the live SVG for each tagged icon and compares hashes — if it differs, the update swaps only the icon's inner vector paths, never deletes and recreates the node, and best-effort reapplies any solid fills you'd customised, matched by path order.
 
 
 Iconsource is open source, consider contributing. Code available on [GitHub](https://github.com/atropical/iconsource).
@@ -28,6 +28,9 @@ For bug reports, suggestions, or questions, please open an [issue](https://githu
 Iconsource is able to search and fetch from so many libraries thanks to [Iconify](https://iconify.design), which aggregates them into one API.
 
 
+
+VERSION NOTES (1.1.1):
+Fixes icon previews failing to load inside Figma because of a CORS error. Icons are now fetched in batches per library, which also makes browsing faster and more reliable.
 
 TAGS:
 icons, icon library, lucide, phosphor, tabler, material symbols, feather, heroicons, open source icons, svg, import icons, browse icons, version sync, design tokens, icon search, icon import, developer
