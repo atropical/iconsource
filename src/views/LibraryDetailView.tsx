@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Text, Input, Link, Flex, Button, SegmentedControl, Tabs } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
 import { IconGlyph } from "../components/IconGlyph";
+import { ImportOptionsControls } from "../components/ImportOptionsControls";
 import { detectNameStyles, fetchIconData, getPrefixIndex, PrefixIndex } from "../utils/iconify";
 import { usePrefs } from "../hooks/usePrefs";
-import { IconLibrary, MessageTypes, PluginMessage } from "../types.d";
+import { IconImportOptions, IconLibrary, MessageTypes, PluginMessage } from "../types.d";
 
 interface LibraryDetailViewProps {
   library: IconLibrary;
@@ -142,6 +143,9 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
   // (Phosphor "Bold", classic Material Icons "Outline", ...) doesn't carry
   // its own version, it's a filtered subset of the one underlying prefix.
   const activeVersion = library.styles.find((s) => s.prefix === activePrefix)?.version;
+  const activePalette = !!library.styles.find((s) => s.prefix === activePrefix)?.palette;
+  const importOptions: IconImportOptions = prefs.importOptions ?? {};
+  const effectiveOptions: IconImportOptions = activePalette ? { outline: importOptions.outline } : importOptions;
 
   const selectTab = (key: string) => {
     setActiveTabKey(key);
@@ -228,6 +232,7 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
             // of the prefix's ~9,000 icons) and reports an update
             // available immediately after a fresh import.
             libraryFingerprint: `${activeVersion ?? "v0"}:${prefixTotal}`,
+            options: effectiveOptions,
           } as PluginMessage,
         },
         "*"
@@ -353,7 +358,14 @@ export const LibraryDetailView: React.FC<LibraryDetailViewProps> = ({ library, o
             </div>
           </div>
 
-          <div style={{ position: "sticky", bottom: 0, background: STICKY_BG, paddingTop: "0.75rem" }}>
+          <div style={{ position: "sticky", bottom: 0, background: STICKY_BG, paddingTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            <ImportOptionsControls
+              idPrefix="import"
+              value={importOptions}
+              onChange={(next) => setPref("importOptions", next)}
+              palette={activePalette}
+              disabled={importing}
+            />
             <Button variant="primary" size="medium" fullWidth onClick={importStyle} disabled={importing || !activeTab}>
               {importing
                 ? phase === "fetching"

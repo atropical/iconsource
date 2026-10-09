@@ -29,8 +29,8 @@ Iconsource is able to search and fetch from so many libraries thanks to [Iconify
 
 
 
-VERSION NOTES (1.1.1):
-Fixes icon previews failing to load inside Figma because of a CORS error. Icons are now fetched in batches per library, which also makes browsing faster and more reliable.
+VERSION NOTES (1.2.0):
+New import options: outline strokes, flatten layers, and a default colour (hex, colour variable or paint style, including team library variables). Colour is always applied last. Options can be re-applied to libraries already imported from Check for Updates, even with no new version. You can now stop tracking a library removed by hand. Fixes icons changing size after an update and errors when updating icons used inside instances.
 
 TAGS:
 icons, icon library, lucide, phosphor, tabler, material symbols, feather, heroicons, open source icons, svg, import icons, browse icons, version sync, design tokens, icon search, icon import, developer

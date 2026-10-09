@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Text, Link, Flex, Button } from "figma-kit";
 import { PluginDialogShell } from "../components/PluginDialogShell";
+import { ImportOptionsControls } from "../components/ImportOptionsControls";
 import { fetchIconData, fingerprintFor, getAllCollections } from "../utils/iconify";
-import { MessageTypes, PluginMessage, TrackedIconNode, TrackedLibraryGroup } from "../types.d";
+import { IconImportOptions, MessageTypes, PluginMessage, TrackedIconNode, TrackedLibraryGroup } from "../types.d";
 
 export const UpdateView: React.FC = () => {
   const [groups, setGroups] = useState<TrackedLibraryGroup[]>([]);
@@ -10,6 +11,8 @@ export const UpdateView: React.FC = () => {
   const [updatingPrefix, setUpdatingPrefix] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
+  // Options being edited per library, before "Apply" rebuilds its icons.
+  const [draftOptions, setDraftOptions] = useState<Record<string, IconImportOptions>>({});
 
   // Every fetch this view kicks off (collection metadata, per-icon SVG data)
   // registers its controller here so it can be aborted in one shot if the
@@ -48,6 +51,7 @@ export const UpdateView: React.FC = () => {
         setProgress({ done: pluginMessage.imported ?? 0, total: pluginMessage.total ?? 0 });
       } else if (pluginMessage.type === MessageTypes.UPDATE_RESULT) {
         setUpdatingPrefix(null);
+        setDraftOptions({});
         parent.postMessage({ pluginMessage: { type: MessageTypes.SCAN_TRACKED_REQUEST } as PluginMessage }, "*");
       } else if (pluginMessage.type === MessageTypes.UPDATE_ERROR) {
         setUpdatingPrefix(null);
@@ -81,11 +85,18 @@ export const UpdateView: React.FC = () => {
         importedFingerprint,
         currentFingerprint,
         updateAvailable: currentFingerprint !== undefined && currentFingerprint !== importedFingerprint,
+        palette: info?.palette,
       };
     });
   };
 
-  const updateGroup = async (group: TrackedLibraryGroup) => {
+  /**
+   * Re-fetch a library's icons and rebuild them in place. A plain update
+   * only touches icons whose SVG changed; passing `options` forces every
+   * icon to be rebuilt with them, which is how outline/flatten get applied
+   * to (or removed from) icons that were imported without them.
+   */
+  const updateGroup = async (group: TrackedLibraryGroup, options?: IconImportOptions) => {
     if (!group.currentFingerprint) return;
     setError(null);
     setUpdatingPrefix(group.prefix);
@@ -104,6 +115,8 @@ export const UpdateView: React.FC = () => {
             prefix: group.prefix,
             icons,
             libraryFingerprint: group.currentFingerprint,
+            options,
+            force: options !== undefined,
           } as PluginMessage,
         },
         "*"
@@ -115,9 +128,30 @@ export const UpdateView: React.FC = () => {
     }
   };
 
+  /** Clear the tags on a library's icons, e.g. leftovers of a library deleted by hand. The icons stay on the canvas. */
+  const untrack = (group: TrackedLibraryGroup) => {
+    const confirmed = window.confirm(
+      `Stop tracking ${group.icons.length} icon${group.icons.length === 1 ? "" : "s"} from "${group.prefix}"?\n\nThe icons stay in the document but will no longer be checked for updates.`
+    );
+    if (!confirmed) return;
+    setChecking(true);
+    parent.postMessage({ pluginMessage: { type: MessageTypes.UNTRACK_LIBRARY_REQUEST, prefix: group.prefix } as PluginMessage }, "*");
+  };
+
   const jumpTo = (nodeId: string) => {
     parent.postMessage({ pluginMessage: { type: MessageTypes.SELECT_NODE_REQUEST, nodeId } as PluginMessage }, "*");
   };
+
+  // A library's options as imported. Icons from separate imports can differ;
+  // an option counts as on only when every icon in the library has it.
+  const currentOptionsOf = (group: TrackedLibraryGroup): IconImportOptions => ({
+    outline: group.icons.every((i) => i.options.outline),
+    flatten: group.icons.every((i) => i.options.flatten),
+    // Shared only when every icon has the same colour; otherwise shown as original.
+    color: group.icons.every((i) => JSON.stringify(i.options.color ?? null) === JSON.stringify(group.icons[0].options.color ?? null))
+      ? group.icons[0].options.color
+      : undefined,
+  });
 
   const outdated = groups.filter((g) => g.updateAvailable);
 
@@ -152,6 +186,10 @@ export const UpdateView: React.FC = () => {
                 <Text weight="strong">{group.prefix}</Text>
                 <Text style={{ color: "var(--figma-color-text-secondary)" }}>{group.icons.length} icon{group.icons.length === 1 ? "" : "s"} in this document</Text>
               </Flex>
+              <Flex gap="2" align="center">
+              <Button variant="text" onClick={() => untrack(group)} disabled={updatingPrefix !== null}>
+                Stop tracking
+              </Button>
               {group.updateAvailable ? (
                 <Button onClick={() => updateGroup(group)} disabled={updatingPrefix === group.prefix}>
                   {updatingPrefix === group.prefix ? `Updating… ${progress.done}/${progress.total}` : "Update library"}
@@ -159,7 +197,34 @@ export const UpdateView: React.FC = () => {
               ) : (
                 <Text style={{ color: "var(--figma-color-text-secondary)" }}>Up to date</Text>
               )}
+              </Flex>
             </Flex>
+            {(() => {
+              const current = currentOptionsOf(group);
+              const draft = draftOptions[group.prefix] ?? current;
+              const effective: IconImportOptions = group.palette ? { outline: draft.outline } : draft;
+              const changed = !!effective.outline !== !!current.outline
+                || !!effective.flatten !== !!current.flatten
+                || JSON.stringify(effective.color ?? null) !== JSON.stringify(current.color ?? null);
+              return (
+                <Flex justify="between" align="center" gap="2" wrap="wrap">
+                  <ImportOptionsControls
+                    idPrefix={`restyle-${group.prefix}`}
+                    value={draft}
+                    onChange={(next) => setDraftOptions((prev) => ({ ...prev, [group.prefix]: next }))}
+                    palette={group.palette}
+                    disabled={updatingPrefix !== null}
+                  />
+                  {(changed || updatingPrefix === group.prefix) && (
+                    <Button variant="secondary" onClick={() => updateGroup(group, effective)} disabled={updatingPrefix !== null || !group.currentFingerprint}>
+                      {updatingPrefix === group.prefix
+                        ? `Applying… ${progress.done}/${progress.total}`
+                        : `Apply to ${group.icons.length} icon${group.icons.length === 1 ? "" : "s"}`}
+                    </Button>
+                  )}
+                </Flex>
+              );
+            })()}
             <Flex gap="1" wrap="wrap">
               {group.icons.slice(0, 12).map((icon) => (
                 <Link key={icon.nodeId} onClick={() => jumpTo(icon.nodeId)} style={{ cursor: "pointer" }}>

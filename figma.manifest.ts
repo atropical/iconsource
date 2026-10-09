@@ -6,6 +6,7 @@ export default {
   "ui": "src/index.html",
   "editorType": ["figma", "dev"],
   "documentAccess": "dynamic-page",
+  "permissions": ["teamlibrary"],
   "menu": [
     { "command": "browse", "name": "Browse Icons…" },
     { "command": "check-updates", "name": "Check for Updates…" }

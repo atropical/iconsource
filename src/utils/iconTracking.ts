@@ -1,6 +1,7 @@
 /// <reference types="@figma/plugin-typings" />
 
 import { isStaleRun } from "./cancellation";
+import type { IconColor, IconImportOptions } from "../types.d";
 
 /**
  * Node tagging + version-safe replace for imported icons. Runs on the plugin
@@ -41,6 +42,8 @@ export const NS = "iconsource";
 export const KEY_ICON = "icon"; // "<prefix>:<name>"
 export const KEY_HASH = "svgHash";
 export const KEY_FINGERPRINT = "libraryFingerprint";
+export const KEY_OPTIONS = "options"; // comma list, e.g. "outline,flatten"
+export const KEY_COLOR = "color"; // JSON IconColor, empty when unset
 
 export const LEGACY_KEY_ICON = `${NS}:icon`;
 export const LEGACY_KEY_HASH = `${NS}:svgHash`;
@@ -61,6 +64,16 @@ export interface IconTag {
   name: string;
   svgHash: string;
   libraryFingerprint: string;
+  options: IconImportOptions;
+}
+
+function encodeOptions(options: IconImportOptions): string {
+  return [options.outline && "outline", options.flatten && "flatten"].filter(Boolean).join(",");
+}
+
+function decodeOptions(raw: string): IconImportOptions {
+  const set = new Set(raw.split(","));
+  return { outline: set.has("outline"), flatten: set.has("flatten") };
 }
 
 export function readIconTag(node: SceneNode): IconTag | null {
@@ -80,13 +93,161 @@ export function readIconTag(node: SceneNode): IconTag | null {
 
   const [prefix, ...rest] = icon.split(":");
 
-  return { icon, prefix, name: rest.join(":"), svgHash, libraryFingerprint };
+  const options = decodeOptions(node.getSharedPluginData(NS, KEY_OPTIONS));
+  const rawColor = node.getSharedPluginData(NS, KEY_COLOR);
+  if (rawColor) {
+    try { options.color = JSON.parse(rawColor) as IconColor; } catch { /* ignore a malformed tag */ }
+  }
+
+  return { icon, prefix, name: rest.join(":"), svgHash, libraryFingerprint, options };
 }
 
-function tagIconNode(node: SceneNode, icon: string, svgHash: string, libraryFingerprint: string): void {
+function tagIconNode(node: SceneNode, icon: string, svgHash: string, libraryFingerprint: string, options?: IconImportOptions): void {
   node.setSharedPluginData(NS, KEY_ICON, icon);
   node.setSharedPluginData(NS, KEY_HASH, svgHash);
   node.setSharedPluginData(NS, KEY_FINGERPRINT, libraryFingerprint);
+  if (options) {
+    node.setSharedPluginData(NS, KEY_OPTIONS, encodeOptions(options));
+    node.setSharedPluginData(NS, KEY_COLOR, options.color ? JSON.stringify(options.color) : "");
+  }
+}
+
+/** Identity of a colour choice, for telling whether options changed. */
+function colorKey(color?: IconColor): string {
+  if (!color) return "";
+  if (color.kind === "hex") return `hex:${color.hex.toLowerCase()}`;
+  if (color.kind === "variable") return `var:${color.key ?? color.id}`;
+  return `style:${color.id}`;
+}
+
+function optionsKey(options: IconImportOptions): string {
+  return `${encodeOptions(options)}|${colorKey(options.color)}`;
+}
+
+function hexToRgb(hex: string): RGB {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean.padEnd(6, "0");
+  const n = parseInt(full.slice(0, 6), 16);
+  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 };
+}
+
+/** A colour choice resolved against the document, ready to stamp onto nodes. */
+type ResolvedColor = { paint: SolidPaint } | { styleId: string };
+
+const resolvedColors = new Map<string, Promise<ResolvedColor | null>>();
+
+/**
+ * Turn a colour choice into a paint or style id. Library variables are
+ * imported into the file once per session; a variable or style that no
+ * longer exists resolves to null and the icon keeps its original colour.
+ */
+function resolveColor(color: IconColor): Promise<ResolvedColor | null> {
+  const key = colorKey(color);
+  const cached = resolvedColors.get(key);
+  if (cached) return cached;
+
+  const promise = (async (): Promise<ResolvedColor | null> => {
+    if (color.kind === "hex") return { paint: { type: "SOLID", color: hexToRgb(color.hex) } };
+    if (color.kind === "style") {
+      const style = await figma.getStyleByIdAsync(color.id);
+      return style ? { styleId: style.id } : null;
+    }
+    const variable = color.key
+      ? await figma.variables.importVariableByKeyAsync(color.key)
+      : color.id ? await figma.variables.getVariableByIdAsync(color.id) : null;
+    if (!variable) return null;
+    const base: SolidPaint = { type: "SOLID", color: { r: 0, g: 0, b: 0 } };
+    return { paint: figma.variables.setBoundVariableForPaint(base, "color", variable) };
+  })().catch((e) => {
+    console.error("Could not resolve icon colour", e);
+    resolvedColors.delete(key);
+    return null;
+  });
+
+  resolvedColors.set(key, promise);
+  return promise;
+}
+
+/** Recolour every visible fill and stroke inside the icon. Layers with neither (clip masks, empty groups) are left alone. */
+async function applyColor(container: ChildrenMixin & SceneNode, color: IconColor): Promise<void> {
+  const resolved = await resolveColor(color);
+  if (!resolved) return;
+
+  const walk = async (n: SceneNode) => {
+    if ("fills" in n && hasVisibleFill(n)) {
+      if ("paint" in resolved) (n as GeometryMixin).fills = [resolved.paint];
+      else await (n as unknown as MinimalFillsMixin).setFillStyleIdAsync(resolved.styleId);
+    }
+    if ("strokes" in n && (n as GeometryMixin).strokes.some((p) => p.visible !== false)) {
+      if ("paint" in resolved) (n as GeometryMixin).strokes = [resolved.paint];
+      else await (n as unknown as MinimalStrokesMixin).setStrokeStyleIdAsync(resolved.styleId);
+    }
+    if ("children" in n) for (const child of (n as ChildrenMixin).children) await walk(child);
+  };
+  for (const child of container.children) await walk(child);
+}
+
+type StrokableNode = SceneNode & GeometryMixin;
+
+function hasVisibleStroke(node: SceneNode): node is StrokableNode {
+  return "outlineStroke" in node && "strokes" in node
+    && (node as GeometryMixin).strokes.some((p) => p.visible !== false)
+    && (node as unknown as MinimalStrokesMixin).strokeWeight !== 0;
+}
+
+function hasVisibleFill(node: SceneNode): boolean {
+  return "fills" in node && Array.isArray(node.fills) && (node.fills as Paint[]).some((p) => p.visible !== false);
+}
+
+/**
+ * Replace every stroked shape inside `container` with its outlined
+ * equivalent, in the same spot in the layer order. A shape that also has a
+ * fill keeps its fill and just loses the stroke, so filled and outlined
+ * parts sit side by side the way the editor's Outline stroke leaves them.
+ */
+function outlineStrokes(container: ChildrenMixin & SceneNode): void {
+  const targets: StrokableNode[] = [];
+  const walk = (n: SceneNode) => {
+    if (hasVisibleStroke(n)) targets.push(n);
+    if ("children" in n) for (const child of (n as ChildrenMixin).children) walk(child);
+  };
+  for (const child of container.children) walk(child);
+
+  for (const shape of targets) {
+    const parent = shape.parent as (ChildrenMixin & BaseNode) | null;
+    if (!parent) continue;
+    const absolute = shape.absoluteTransform;
+    const outlined = (shape as unknown as GeometryMixin).outlineStroke();
+    if (!outlined) continue;
+
+    parent.insertChild(parent.children.indexOf(shape) + 1, outlined);
+    // outlineStroke doesn't document where the new node lands; pin it back
+    // over the original shape in case it was created elsewhere.
+    if ("absoluteTransform" in parent) {
+      const [[a, c, e], [b, d, f]] = (parent as unknown as LayoutMixin).absoluteTransform;
+      const det = a * d - c * b;
+      const [[sa, sc, se], [sb, sd, sf]] = absolute;
+      const inv = [[d / det, -c / det, (c * f - d * e) / det], [-b / det, a / det, (b * e - a * f) / det]];
+      const mul = (r: number[]): [number, number, number] => [
+        r[0] * sa + r[1] * sb, r[0] * sc + r[1] * sd, r[0] * se + r[1] * sf + r[2],
+      ];
+      outlined.relativeTransform = [mul(inv[0]), mul(inv[1])];
+    }
+    outlined.name = shape.name;
+
+    if (hasVisibleFill(shape)) (shape as unknown as GeometryMixin).strokes = [];
+    else shape.remove();
+  }
+}
+
+/** Apply the chosen import options to a freshly created icon frame. Outline runs first so Flatten merges the outlined result, and colour last so it lands on the final layers. */
+async function applyIconOptions(container: ChildrenMixin & SceneNode, options: IconImportOptions): Promise<void> {
+  if (options.outline) outlineStrokes(container);
+  if (options.flatten && container.children.length > 0) {
+    const vector = figma.flatten([...container.children], container);
+    vector.name = container.name;
+  }
+  if (options.color) await applyColor(container, options.color);
 }
 
 const GRID_COLUMNS = 16;
@@ -109,6 +270,7 @@ const ICON_TARGET_SIZE = 24;
 export async function insertIconsBatch(
   icons: IconInput[],
   libraryFingerprint: string,
+  options: IconImportOptions,
   frameName: string,
   runToken: number,
   onProgress?: (done: number, total: number) => void
@@ -142,7 +304,8 @@ export async function insertIconsBatch(
     node.name = data.icon;
 
     frame.appendChild(node);
-    tagIconNode(node, data.icon, hashString(data.svg), libraryFingerprint);
+    await applyIconOptions(node, options);
+    tagIconNode(node, data.icon, hashString(data.svg), libraryFingerprint, options);
     node.setRelaunchData({ "check-updates": "Check this icon for updates" });
 
     if (i % 25 === 24) {
@@ -178,6 +341,12 @@ export async function findTrackedNodes(runToken?: number): Promise<SceneNode[]> 
   const found: SceneNode[] = [];
 
   const walk = (node: BaseNode) => {
+    // Instances are copies of a main component: their layers can't be
+    // removed or replaced, and updating the main component updates them
+    // anyway. This also covers an icon that was itself turned into a
+    // component, whose instances inherit its tag. Checked before the tag so
+    // those tagged instances are skipped too.
+    if (node.type === "INSTANCE") return;
     if ("getSharedPluginData" in node && readIconTag(node as SceneNode)) {
       const icon = node as SceneNode;
       found.push(icon);
@@ -195,6 +364,20 @@ export async function findTrackedNodes(runToken?: number): Promise<SceneNode[]> 
 
   for (const page of figma.root.children) walk(page);
   return found;
+}
+
+/**
+ * Stop tracking every icon from one library style: clears the tags so the
+ * icons stay on the canvas but no longer show up in Check for Updates.
+ */
+export async function untrackLibrary(prefix: string): Promise<number> {
+  const nodes = (await findTrackedNodes()).filter((node) => readIconTag(node)?.prefix === prefix);
+  for (const node of nodes) {
+    for (const key of [KEY_ICON, KEY_HASH, KEY_FINGERPRINT, KEY_OPTIONS, KEY_COLOR]) node.setSharedPluginData(NS, key, "");
+    for (const key of [LEGACY_KEY_ICON, LEGACY_KEY_HASH, LEGACY_KEY_FINGERPRINT]) node.setPluginData(key, "");
+    node.setRelaunchData({});
+  }
+  return nodes.length;
 }
 
 /** Solid fills on an icon's direct vector/path children, captured by traversal order, for reapplication after a geometry swap. */
@@ -239,10 +422,19 @@ export interface UpdateResult {
  * inner vector paths are swapped. User-applied colours are captured before
  * the swap and reapplied by traversal order afterwards.
  */
-export function updateIconNode(existing: SceneNode, newSvg: string, icon: string, libraryFingerprint: string): UpdateResult {
+export async function updateIconNode(
+  existing: SceneNode,
+  newSvg: string,
+  icon: string,
+  libraryFingerprint: string,
+  options?: IconImportOptions,
+  force = false
+): Promise<UpdateResult> {
   const newHash = hashString(newSvg);
   const tag = readIconTag(existing);
-  if (tag && tag.svgHash === newHash) {
+  // Without explicit options an update keeps whatever the icon was imported with.
+  const effective = options ?? tag?.options ?? {};
+  if (tag && tag.svgHash === newHash && !force) {
     tagIconNode(existing, icon, newHash, libraryFingerprint); // fingerprint may still have advanced even if this icon's own SVG didn't change
     return { node: existing, changed: false };
   }
@@ -258,8 +450,12 @@ export function updateIconNode(existing: SceneNode, newSvg: string, icon: string
   // scratch node; its children get moved into the existing node, then it's
   // discarded.
   const scratch = figma.createNodeFromSvg(newSvg);
-  const newWidth = scratch.width;
-  const newHeight = scratch.height;
+  // Scale the new geometry to the icon's current size before moving it in,
+  // so an update keeps the size the icon was placed at (24px on import, or
+  // whatever the user resized it to) instead of jumping to the SVG's native
+  // viewBox size.
+  const scale = Math.min(existing.width / Math.max(scratch.width, 1), existing.height / Math.max(scratch.height, 1));
+  if (Number.isFinite(scale) && scale > 0) scratch.rescale(scale);
 
   for (const child of [...container.children]) child.remove();
   for (const child of [...(scratch as unknown as ChildrenMixin).children]) {
@@ -267,10 +463,15 @@ export function updateIconNode(existing: SceneNode, newSvg: string, icon: string
   }
   scratch.remove();
 
-  if ("resize" in existing) (existing as LayoutMixin).resize(newWidth, newHeight);
-
-  applyFills(existing, fills);
-  tagIconNode(existing, icon, newHash, libraryFingerprint);
+  await applyIconOptions(container, effective);
+  // Fills are matched by layer order, which only lines up when the layer
+  // structure is built the same way as before. After an options change
+  // (say, stroke paths now outlined into filled shapes) the old fills would
+  // land on the wrong kind of layer, so the fresh import's fills stay.
+  // A chosen colour always wins, so restoring old fills only happens
+  // without one.
+  if (!effective.color && optionsKey(effective) === optionsKey(tag?.options ?? {})) applyFills(existing, fills);
+  tagIconNode(existing, icon, newHash, libraryFingerprint, effective);
 
   return { node: existing, changed: true };
 }
@@ -285,7 +486,9 @@ export async function updateLibraryNodes(
   freshByName: Map<string, IconInput>,
   libraryFingerprint: string,
   runToken: number,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  options?: IconImportOptions,
+  force = false
 ): Promise<{ updated: number }> {
   let updated = 0;
 
@@ -294,8 +497,13 @@ export async function updateLibraryNodes(
     const tag = readIconTag(node);
     const fresh = tag && freshByName.get(tag.name);
     if (tag && fresh) {
-      const result = updateIconNode(node, fresh.svg, fresh.icon, libraryFingerprint);
-      if (result.changed) updated++;
+      // One locked or otherwise uneditable icon shouldn't abort the rest of the library.
+      try {
+        const result = await updateIconNode(node, fresh.svg, fresh.icon, libraryFingerprint, options, force);
+        if (result.changed) updated++;
+      } catch (e) {
+        console.warn(`Skipped ${node.name} (${node.id})`, e);
+      }
     }
 
     if (i % 25 === 24) {
