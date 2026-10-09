@@ -9,6 +9,7 @@ interface RawCollectionInfo {
   license: { title: string; spdx?: string; url?: string };
   samples?: string[];
   version?: string;
+  palette?: boolean;
 }
 
 let allCollectionsCache: Record<string, RawCollectionInfo> | null = null;
@@ -142,7 +143,7 @@ export function groupLibraries(raw: Record<string, RawCollectionInfo>): IconLibr
     };
     const styles: LibraryStyle[] = entries
       .sort((a, b) => (a.style === "Default" ? -1 : b.style === "Default" ? 1 : a.style.localeCompare(b.style)))
-      .map((e) => ({ prefix: e.prefix, label: e.style, total: e.info.total, version: e.info.version }));
+      .map((e) => ({ prefix: e.prefix, label: e.style, total: e.info.total, version: e.info.version, palette: e.info.palette }));
 
     const totalIcons = entries.reduce((sum, e) => sum + e.info.total, 0);
     // Samples must be namespaced under a prefix that's actually fetchable —

@@ -30,6 +30,7 @@ export enum MessageTypes {
   UPDATE_PROGRESS = "UPDATE.PROGRESS",
   UPDATE_RESULT = "UPDATE.RESULT",
   UPDATE_ERROR = "UPDATE.ERROR",
+  UNTRACK_LIBRARY_REQUEST = "UPDATE.UNTRACK.REQUEST",
 
   // Selection sync (for jumping to a tracked node on the canvas)
   SELECT_NODE_REQUEST = "SELECT.NODE.REQUEST",
@@ -38,6 +39,10 @@ export enum MessageTypes {
   PREFS_GET_REQUEST = "PREFS.GET.REQUEST",
   PREFS_GET_RESULT = "PREFS.GET.RESULT",
   PREFS_SET_REQUEST = "PREFS.SET.REQUEST",
+
+  // Colour variables and styles the user can pick as an icon colour
+  COLOR_SOURCES_REQUEST = "COLOR.SOURCES.REQUEST",
+  COLOR_SOURCES_RESULT = "COLOR.SOURCES.RESULT",
 }
 
 /** License metadata for an icon collection, as surfaced by Iconify. */
@@ -55,7 +60,29 @@ export interface LibraryStyle {
   total: number;
   /** Iconify's own version string for this prefix, when available. */
   version?: string;
+  /** True for multi-colour sets (emoji, logos), where flattening would merge every colour into one fill. */
+  palette?: boolean;
 }
+
+/** Post-processing applied to an icon after it's created from SVG, remembered per icon in its tag. */
+export interface IconImportOptions {
+  /** Convert strokes into filled outlines (Outline stroke). */
+  outline?: boolean;
+  /** Merge all of the icon's layers into one vector (Flatten). */
+  flatten?: boolean;
+  /** Colour applied to every fill and stroke once outline/flatten have run. */
+  color?: IconColor;
+}
+
+/**
+ * A colour choice. Variables carry `key` when they come from a team library
+ * (imported into the file on use) and `id` when local; styles are local only,
+ * as the plugin API can't list team library styles.
+ */
+export type IconColor =
+  | { kind: "hex"; hex: string }
+  | { kind: "variable"; id?: string; key?: string; name: string; group: string; hex?: string }
+  | { kind: "style"; id: string; name: string; hex?: string };
 
 /** A browsable icon library — one or more Iconify prefixes grouped by shared name/author, e.g. all of Phosphor's styles. */
 export interface IconLibrary {
@@ -91,6 +118,7 @@ export interface TrackedIconNode {
   iconName: string;
   svgHash: string;
   libraryFingerprint: string;
+  options: IconImportOptions;
 }
 
 /** Tracked icons grouped by the library style (prefix) they came from, for library-level sync. */
@@ -102,6 +130,8 @@ export interface TrackedLibraryGroup {
   /** Filled in by the UI after comparing importedFingerprint to the live one. */
   currentFingerprint?: string;
   updateAvailable?: boolean;
+  /** Multi-colour set, where Flatten is unavailable. */
+  palette?: boolean;
 }
 
 /** Sort/filter choices the user has made, persisted across sessions via figma.clientStorage. */
@@ -110,6 +140,8 @@ export interface IconsourcePrefs {
   librarySortOrder?: "popular" | "az" | "most-icons";
   /** LibraryDetailView's "A→Z / Z→A" icon-name sort control. */
   iconSortOrder?: "az" | "za";
+  /** Import options last chosen in LibraryDetailView. */
+  importOptions?: IconImportOptions;
 }
 
 export interface PluginMessage {
@@ -120,6 +152,7 @@ export interface PluginMessage {
   // Import
   icons?: IconData[];
   libraryFingerprint?: string;
+  options?: IconImportOptions;
   imported?: number;
   total?: number;
   error?: string;
@@ -128,6 +161,8 @@ export interface PluginMessage {
   tracked?: TrackedIconNode[];
   prefix?: string;
   updated?: number;
+  /** UPDATE_LIBRARY_REQUEST: rebuild every icon even if its SVG is unchanged, e.g. to apply new import options. */
+  force?: boolean;
 
   // Selection sync
   nodeId?: string;
@@ -135,4 +170,7 @@ export interface PluginMessage {
   // Prefs: PREFS_GET_RESULT carries the full saved object; PREFS_SET_REQUEST
   // carries only the keys being changed and is merged into what's stored.
   prefs?: Partial<IconsourcePrefs>;
+
+  // COLOR_SOURCES_RESULT
+  colorSources?: IconColor[];
 }
